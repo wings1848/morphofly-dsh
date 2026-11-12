@@ -30,9 +30,9 @@ export class McpGeneration {
    * @param timeoutMs - remaining operation budget; undefined leaves the SDK default.
    * @returns completion of negotiation, or cancellation/deadline rejection.
    */
-  connect(config: Config, timeoutMs: number | undefined): Promise<void> {
+  async connect(config: Config, timeoutMs: number | undefined): Promise<void> {
     this.lifetime.signal.throwIfAborted()
-    const transport = this.transport = createTransport(config)
+    const transport = this.transport = await createTransport(config)
     const close = transport.close.bind(transport)
     let closing: Promise<void> | undefined
     transport.close = () => closing ??= close()

@@ -7,8 +7,7 @@
  */
 
 import type { Transport } from '@modelcontextprotocol/client'
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
+import { loadSdk, loadStdio } from './sdk.ts'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type { Config } from './index.ts'
 
@@ -28,19 +27,23 @@ function buildChildEnv(extra: Record<string, string>): Record<string, string> {
  * @param config - Resolved plugin config discriminated on `transport`.
  * @returns an unstarted MCP transport (stdio or Streamable HTTP).
  */
-export function createTransport(config: Config): Transport {
+export async function createTransport(config: Config): Promise<Transport> {
   switch (config.transport) {
-    case 'stdio':
+    case 'stdio': {
+      const { StdioClientTransport } = await loadStdio()
       return new StdioClientTransport({
         command: config.command,
         args: config.args,
         env: buildChildEnv(config.env),
         cwd: config.cwd,
       })
-    case 'streamable-http':
+    }
+    case 'streamable-http': {
+      const { StreamableHTTPClientTransport } = await loadSdk()
       return new StreamableHTTPClientTransport(
         new URL(config.url),
         { requestInit: { headers: config.headers } },
       )
+    }
   }
 }
