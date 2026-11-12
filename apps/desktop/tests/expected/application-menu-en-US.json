@@ -16,6 +16,12 @@
     "type": "separator"
   },
   {
+    "label": "Reload Interface"
+  },
+  {
+    "label": "Quit and Restart"
+  },
+  {
     "role": "toggleDevTools",
     "label": "Developer tools"
   },
