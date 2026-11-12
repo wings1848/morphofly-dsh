@@ -15,7 +15,7 @@
  * @module
  */
 
-import { Client } from '@modelcontextprotocol/client'
+import { loadSdk } from './sdk.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { assertNever, deepEqualJson, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ServerContext } from './server-context.ts'
@@ -281,6 +281,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
 
   async function connectGeneration(): Promise<void> {
     if (isStopped()) return
+    const { Client } = await loadSdk()
     const client = new Client({ name: 'dsh-mcp-client', version: '0.0.1' }, {
       capabilities: {}, versionNegotiation: { mode: 'auto' },
       listChanged: { tools: { autoRefresh: false, debounceMs: 0, onChanged: () => { void refreshTools() } } },
