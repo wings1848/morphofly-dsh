@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-12-on-demand-mcp-sdk-load.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-12-on-demand-mcp-sdk-load.md
+/agent-note-load-the-mcp-sdk-on-demand:
+  en: 4236f13d6bb82074
+  zh: 2fd1d4b12ac66fc5
+/agent-note-load-the-mcp-sdk-on-demand/problem:
+  en: 3db280ef3f92df52
+  zh: c0e7ed48f6adc80a
+/agent-note-load-the-mcp-sdk-on-demand/decision:
+  en: 75c363d8f4a59640
+  zh: 01b1422b2368370b
+/agent-note-load-the-mcp-sdk-on-demand/alternatives-considered:
+  en: 15beb170a47f52b1
+  zh: 1eb1f0ae17a7fa76
+/agent-note-load-the-mcp-sdk-on-demand/consequences:
+  en: 49aa40eded6d0011
+  zh: a79d9000df904cf4
