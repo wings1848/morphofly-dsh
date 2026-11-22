@@ -278,6 +278,24 @@ describe('FileNavigator beside a preview', () => {
     expect(h.view.getByRole('separator', { name: zh['navigator.resize'] })).not.toBeNull()
   })
 
+  it('marks the covered preview row so its body hides without a :has() subject', async () => {
+    const h = mountNavigator(A)
+    h.row.width = 399
+    await revealSrc(h)
+    const row = h.view.container.querySelector('[data-test-row]')!
+    expect(row.hasAttribute('data-files-navigator-fill')).toBe(true)
+    act(() => { h.row.report(900) })
+    expect(row.hasAttribute('data-files-navigator-fill')).toBe(false)
+    act(() => { h.viewport.report(true) })
+    expect(row.hasAttribute('data-files-navigator-fill')).toBe(true)
+    act(() => { h.viewport.report(false) })
+    expect(row.hasAttribute('data-files-navigator-fill')).toBe(false)
+    act(() => { h.row.report(399) })
+    expect(row.hasAttribute('data-files-navigator-fill')).toBe(true)
+    act(() => { fireEvent.click(h.view.getByRole('button', { name: zh['navigator.hide'] })) })
+    expect(row.hasAttribute('data-files-navigator-fill')).toBe(false)
+  })
+
   it.each(['row', 'viewport'] as const)('hands covered content focus to the open tree only when the %s starts filling', async (source) => {
     const h = mountNavigator(A)
     const removed = vi.spyOn(h.viewport, 'removeEventListener')

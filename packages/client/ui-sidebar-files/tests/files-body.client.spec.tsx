@@ -60,6 +60,8 @@ describe('FilesBody', () => {
     expect(navigator.querySelector('[data-files-reload], [data-files-path]:not(li)')).toBeNull()
     // The tree fills the page: it neither floats nor resizes.
     expect(navigator.hasAttribute('data-files-navigator-mode')).toBe(false)
+    // A page navigator covers no sibling, so its row is never marked.
+    expect(content.hasAttribute('data-files-navigator-fill')).toBe(false)
     expect(view.queryByRole('separator')).toBeNull()
     expect(view.container.querySelector('[data-files-navigator-toggle]')).toBeNull()
     // Escape and a hidden choice for the pane leave the page's tree shown.
