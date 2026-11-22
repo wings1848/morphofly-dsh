@@ -20,6 +20,14 @@ import { DirectoryNode } from './directory-node.ts'
 import { FILL_BELOW, FULLSCREEN_QUERY } from './navigator-layout.ts'
 
 /**
+ * Marks the row a covered navigator fills, so `FilesBody.module.css` hides the
+ * children it covers. A row attribute keeps the style invalidation local: a
+ * `:has()` rule selecting the covering descendant's siblings re-resolved on
+ * nearly every insertion of a streaming turn.
+ */
+const COVERED_ATTRIBUTE = 'data-files-navigator-fill'
+
+/**
  * The box an element is laid out in: its nearest ancestor that generates one,
  * passing over wrappers drawn with `display: contents`.
  * @param element - the laid-out element.
@@ -197,7 +205,9 @@ export interface FilesInjected {
    * drawing, focus in the covered content moves to the tree without closing it;
    * so does focus that hiding the covered content left on the document body,
    * unless the reader moved the keyboard or pointer or the window lost focus
-   * before the width was reported.
+   * before the width was reported. While it fills the row, the row carries
+   * `data-files-navigator-fill`, and the stylesheet hides the covered content
+   * through that attribute.
    * @param paneId - the pane being drawn.
    * @param navigator - the navigator element, or `null` once it is removed.
    * @param closable - whether Escape closes this drawing; the `files` page's tree stays shown.
@@ -707,6 +717,7 @@ export function filesFace(
           const fills = closable && (width < FILL_BELOW || viewport?.matches === true)
           const entering = fills && !filling
           filling = fills
+          row.toggleAttribute(COVERED_ATTRIBUTE, fills)
           pane.width.set(width)
           answerDrawn(pane)
           const inContent = active !== null && row.contains(active) && !navigator.contains(active)
@@ -742,6 +753,7 @@ export function filesFace(
         navigator.addEventListener('focusout', focusout)
         pane.unobserve = () => {
           observer.disconnect()
+          row.removeAttribute(COVERED_ATTRIBUTE)
           viewport?.removeEventListener('change', measure)
           document.removeEventListener('keydown', close)
           row.removeEventListener('focusout', release)

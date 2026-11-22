@@ -72,17 +72,16 @@
   border-left: 0;
 }
 
-/* Covered content stays laid out but cannot receive keyboard focus. */
-:has(> .navigator.fill) > :not(.navigator) {
+/* Covered content stays laid out but cannot receive keyboard focus. The face
+   marks the row instead of the stylesheet matching a filling descendant: a
+   `:has()` subject here re-resolved nearly every row on each streamed
+   insertion. */
+[data-files-navigator-fill] > :not(.navigator) {
   visibility: hidden;
 }
 
 /* navigator-layout `FULLSCREEN_QUERY`: every layout fills the row. */
 @media (width < 768px) {
-  :has(> .navigator:not(.wholePage)) > :not(.navigator) {
-    visibility: hidden;
-  }
-
   .navigator {
     position: absolute;
     inset: 0;

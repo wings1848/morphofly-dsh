@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-21-navigator-fill-row-attribute.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-21-navigator-fill-row-attribute.md
+/agent-note-mark-the-covered-navigator-row-instead-of-matching-it-with-has:
+  en: a174d9d79a2e9dd9
+  zh: 410dcdf5c6c34c1a
+/agent-note-mark-the-covered-navigator-row-instead-of-matching-it-with-has/problem:
+  en: 2808a9383ade24fa
+  zh: 47990fad6876e937
+/agent-note-mark-the-covered-navigator-row-instead-of-matching-it-with-has/decision:
+  en: a8f52a43c86bb207
+  zh: 1a243edfb26a1851
+/agent-note-mark-the-covered-navigator-row-instead-of-matching-it-with-has/alternatives-considered:
+  en: bfdd6366bae0a8f5
+  zh: 58c343757b4081be
+/agent-note-mark-the-covered-navigator-row-instead-of-matching-it-with-has/consequences:
+  en: 943659c10fb865a6
+  zh: 3eccb972ba810765
+/agent-note-mark-the-covered-navigator-row-instead-of-matching-it-with-has/testing:
+  en: 9c01e6d9f2ccc11f
+  zh: 05b852fa82f4bccf
