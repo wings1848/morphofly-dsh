@@ -19,11 +19,8 @@ import { fileURLToPath } from 'node:url'
 import type { Browser, Page, Route, WebSocketRoute } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
-import {
-  ToolCallId, expandAssistantStream,
-  type AssistantStreamRecord, type TimedStreamChunk,
-} from '@deepseek-ai/dsh-llm'
-import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { type ToolCallId, expandAssistantStream } from '@deepseek-ai/dsh-llm'
+import type { SessionId, Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionListValue } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import {
@@ -34,6 +31,7 @@ import {
 import {
   connectFreshWorkspace, expandTurnProcesses, newEnglishPage, REPO_ROOT, saveFailureShot,
 } from './support.ts'
+import { brandString } from '@deepseek-ai/dsh-brand'
 
 const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/fresh-round-trip', import.meta.url))
 const FIXTURE = fileURLToPath(new URL('../../../snapshots/web/fresh-round-trip/session.v3.jsonl', import.meta.url))
@@ -57,26 +55,7 @@ type SessionListResponse = { result: RemoteResult<SessionListValue> }
 /** Rendered text of the system prompt surface node, or undefined when the surface carries none. */
 function systemPromptText(session: Session): string | undefined {
   const message = session.deriveMessages().find(candidate => candidate.role === 'system')
-  return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')
-}
-
-/** Expand the Assistant streams V5 stores beside the log for the given settlements. */
-async function settlementChunks(
-  scaffold: WebScaffold,
-  sessionId: SessionId,
-  settlements: readonly SessionEvent[],
-): Promise<readonly TimedStreamChunk[]> {
-  const handle = await scaffold.ctx.sessionPersistence.open(sessionId, 'read')
-  try {
-    const records: AssistantStreamRecord[] = []
-    for (const event of settlements) {
-      if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') continue
-      records.push(...await handle.readAssistantStream?.(event.seq) ?? [])
-    }
-    return expandAssistantStream(records)
-  } finally {
-    await handle.close()
-  }
+  return message?.content.flatMap(block => block.type === 'text' ? [block.text.trim()] : []).filter(Boolean).join('\n\n')
 }
 
 describe('web e2e: fresh round trip through the real assembly', () => {
@@ -146,14 +125,24 @@ describe('web e2e: fresh round trip through the real assembly', () => {
     let accepted = false
     try {
       await input.fill(PROMPT)
+      // Hold the prompt POST at the browser boundary so the Host cannot accept
+      // the message before the pre-accept snapshot is read.
+      const promptSent = Promise.withResolvers<undefined>()
+      const releasePrompt = Promise.withResolvers<undefined>()
+      const holdPrompt = async (route: Route): Promise<void> => {
+        promptSent.resolve(undefined)
+        await releasePrompt.promise
+        await route.continue()
+      }
+      await page.route('**/api/session/prompt', holdPrompt, { times: 1 })
       const admitted = page.waitForResponse('**/api/session/prompt')
-      const [echoSnapshot, response] = await Promise.all([
-        input.evaluate(async (element, prompt) => {
+      try {
+        const echoCapture = input.evaluate(async (element, prompt) => {
           element.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
           }))
-          // sendSession registered its paint yield first. This frame observes the
-          // composer holding the message while the Host has not accepted it yet.
+          // sendSession registered its paint yield first; this frame observes the
+          // composer holding the message while the POST is still held.
           await new Promise<void>((resolve) => { requestAnimationFrame(() => { resolve() }) })
           const echo = document.querySelector<HTMLElement>('[data-submission-echo]')
           return [
@@ -161,12 +150,15 @@ describe('web e2e: fresh round trip through the real assembly', () => {
             `composer: ${JSON.stringify(element.textContent ?? '')}`,
             `contenteditable: ${element.getAttribute('contenteditable')}`,
           ].join('\n')
-        }, PROMPT),
-        admitted,
-      ])
+        }, PROMPT)
+        await promptSent.promise
+        await compareOrRefreshGolden(ECHO_EXPECTED, await echoCapture, MODE)
+      } finally {
+        releasePrompt.resolve(undefined)
+      }
+      const response = await admitted
       expect(await response.json()).toMatchObject({ result: { ok: true, value: { accepted: true } } })
       accepted = true
-      await compareOrRefreshGolden(ECHO_EXPECTED, echoSnapshot, MODE)
       // Acceptance publishes the echo and clears the composer; maintenance keeps the Turn from starting.
       await page.locator('[data-submission-echo]', { hasText: PROMPT }).waitFor()
       await expect.poll(() => input.textContent()).toBe('')
@@ -272,13 +264,13 @@ describe('web e2e: fresh round trip through the real assembly', () => {
     const probe = await launchWebScaffold()
     try {
       const handle = await probe.ctx.agents.create({
-        sessionId: SessionId('web-url-probe'),
+        sessionId: brandString<SessionId>('web-url-probe'),
         setup: agentCtx => probe.ctx.agentPresets.mount(agentCtx).then(() => undefined),
       })
       try {
         const result = await executeToolFixture(probe.ctx, {
           signal: AbortSignal.timeout(5_000),
-          callId: ToolCallId('web-url-probe'),
+          callId: brandString<ToolCallId>('web-url-probe'),
           name: 'bash',
           arguments: {
             command: 'printf \'%s\\n\' "$DSH_WEB_URL"',
@@ -318,9 +310,10 @@ describe('web e2e: fresh round trip through the real assembly', () => {
     const turnEnds = sessionEvents.filter(e => e.type === 'turn/end')
     expect(turnEnds.length).toBe(1)
     expect((turnEnds[0] as SessionEvent & { data: { reason: { kind: string } } }).data.reason.kind).toBe('completed')
-    // The V5 sidecar's stream members are the authoritative incrementality proof.
-    if (settledSessionId === undefined) throw new Error('the drive turn did not publish a session id')
-    expect((await settlementChunks(scaffold, settledSessionId, sessionEvents)).length).toBeGreaterThan(10)
+    // Embedded stream members are the authoritative incrementality proof.
+    expect(sessionEvents.flatMap(e => e.type === 'assistant/message' || e.type === 'assistant/attempt'
+      ? expandAssistantStream(e.data.stream)
+      : []).length).toBeGreaterThan(10)
   }, 60_000)
 
   it.skipIf(MODE === 'record')('matches the conversation aria golden with stable anchors', async () => {

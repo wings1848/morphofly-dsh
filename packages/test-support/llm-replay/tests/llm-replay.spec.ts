@@ -5,20 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { CompactionId } from '@deepseek-ai/dsh-compaction'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { CompactionId } from '@deepseek-ai/dsh-compaction/types'
 import DeepSeekLlmApiExtensionRegistry from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import LlmRuntime, {
-  assistantStreamFirstTokenTime,
   AssistantStreamAccumulator,
   BlockAssembler,
-  ToolCallId,
+  type ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
   GenerateOptions,
   LlmAdapter,
   StreamChunk,
-  type AssistantStreamRecord,
   type ToolResultMessage,
 } from '@deepseek-ai/dsh-llm'
 import {
@@ -32,8 +31,6 @@ import {
   loadReplayScript,
   loadSessionScripts,
   name,
-  formatAssistantStreamFixture,
-  parseAssistantStreamFixture,
   parseSessionHeader,
   parseSessionLog,
   prepareSessionSnapshotFixtureForComparison,
@@ -61,12 +58,12 @@ const TEXT_CHUNKS: StreamChunk[] = [
   { type: 'finish', reason: { kind: 'stop' } },
 ]
 
-const COMPACTION_ID = CompactionId('replay-compaction')
+const COMPACTION_ID = brandString<CompactionId>('replay-compaction')
 
 /** Build a minimal session-JSONL string: a header line + the given events. */
 function sessionJsonl(
   events: SessionEvent[],
-  header?: { id?: string; createdAt?: number; seedLength?: number; version?: 0 | 1 | 2 | 3 | 4 | 5 },
+  header?: { id?: string; createdAt?: number; seedLength?: number; version?: 0 | 1 | 2 | 3 | 4 },
 ): string {
   const version = header?.version ?? 0
   const headerLine = JSON.stringify({
@@ -100,18 +97,12 @@ function releasedV2ResultMessage(callId: ToolCallId): ToolResultMessage {
   } as unknown as ToolResultMessage
 }
 
-/**
- * Build a valid one-turn Session around recorded model calls.
- *
- * Defaults to the released V4 generation because replay derivation needs the
- * embedded streams that V5 moved into Session-local sidecars; V5 fixtures carry
- * no stream rows and need an explicit `readAssistantStream` reader.
- */
+/** Build a valid one-turn Session around recorded model calls. */
 function replaySessionJsonl(
   calls: readonly StreamChunk[][],
-  header?: { id?: string; createdAt?: number; seedLength?: number; version?: 0 | 1 | 2 | 3 | 4 | 5 },
+  header?: { id?: string; createdAt?: number; seedLength?: number; version?: 0 | 1 | 2 | 3 | 4 },
 ): string {
-  const version = header?.version ?? 4
+  const version = header?.version ?? SESSION_FORMAT_VERSION
   const events: SessionEvent[] = []
   let seq = 0
   const push = (type: string, data: SessionEvent['data']): void => {
@@ -168,7 +159,7 @@ function streamEvent(
   step: number,
   chunks: readonly StreamChunk[],
   time0 = 1_000,
-): SessionEvent {
+): SessionEvent<'assistant/message'> | SessionEvent<'assistant/attempt'> {
   const accumulator = new AssistantStreamAccumulator()
   const assembler = new BlockAssembler()
   for (const [index, chunk] of chunks.entries()) {
@@ -183,7 +174,7 @@ function streamEvent(
   }
   const finish = chunks.at(-1)
   if (finish?.type !== 'finish' || finish.reason.kind === 'error') {
-    return { type: 'assistant/attempt', ...common } as SessionEvent
+    return { type: 'assistant/attempt', ...common }
   }
   return {
     type: 'assistant/message',
@@ -199,55 +190,6 @@ function streamEvent(
         },
       }),
       ...assembler.usage === undefined ? {} : { usage: assembler.usage },
-    },
-    surfaceOp: 'append',
-  } as SessionEvent
-}
-
-/** Stream records one settlement's V5 sidecar would hold for the recorded call. */
-function streamRecords(chunks: readonly StreamChunk[], time0 = 1_000): AssistantStreamRecord[] {
-  const accumulator = new AssistantStreamAccumulator()
-  for (const [index, chunk] of chunks.entries()) accumulator.push({ time: time0 + index * 7, chunk })
-  return [...accumulator.snapshot()]
-}
-
-/** One Session V5 settlement: scalars and the committed message, no embedded stream. */
-function v5StreamEvent(
-  seq: number,
-  turn: number,
-  step: number,
-  chunks: readonly StreamChunk[],
-  time0 = 1_000,
-): SessionEvent {
-  const assembler = new BlockAssembler()
-  for (const chunk of chunks) assembler.push(chunk)
-  const records = streamRecords(chunks, time0)
-  const firstTokenTime = assistantStreamFirstTokenTime(records)
-  const scalars = {
-    ...assembler.usage === undefined ? {} : { usage: assembler.usage },
-    ...firstTokenTime === undefined ? {} : { firstTokenTime },
-  }
-  const finish = chunks.at(-1)
-  const time = time0 + Math.max(0, chunks.length - 1) * 7
-  if (finish?.type !== 'finish' || finish.reason.kind === 'error') {
-    return { type: 'assistant/attempt', seq: SessionSeq(seq), time, data: { turn, step, ...scalars } }
-  }
-  return {
-    type: 'assistant/message',
-    seq: SessionSeq(seq),
-    time,
-    data: {
-      turn,
-      step,
-      message: createAssistantMessage({
-        content: assembler.blocks(),
-        source: {
-          provider: 'mock',
-          model: 'mock',
-          ...assembler.replayState === undefined ? {} : { replayState: assembler.replayState },
-        },
-      }),
-      ...scalars,
     },
     surfaceOp: 'append',
   }
@@ -608,7 +550,7 @@ describe('parseSessionLog', () => {
       data: {
         turn: 1,
         step: 1,
-        firstTokenTime: 0,
+        stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [0, 0], texts: ['a', 'b', 'c'] }],
       },
     }])
   })
@@ -632,7 +574,7 @@ describe('parseSessionLog', () => {
         data: {
           turn: 1,
           step: 1,
-          firstTokenTime: 0,
+          stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [3], texts: ['a', 'b'] }],
         },
       },
     ])
@@ -714,8 +656,7 @@ describe('parseSessionLog', () => {
       },
     }))
     const source = rows.join('\n')
-    expect(deriveReplayScript(parseSessionLog(source), () => streamRecords(TEXT_CHUNKS)))
-      .toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
+    expect(deriveReplayScript(parseSessionLog(source))).toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
   })
 
   it('rejects genuine empty current tools instead of treating them as a placeholder', () => {
@@ -769,6 +710,7 @@ describe('parseSessionLog', () => {
   })
 
   it('synthesizes projected tool-call chunk envelopes from their argument count', () => {
+    const callId = brandString<ToolCallId>('call-1')
     const source = [
       JSON.stringify({ type: 'session', version: 0, id: 'packed-tool', createdAt: 0 }),
       JSON.stringify({ type: 'turn/start', data: { turn: 1 } }),
@@ -786,7 +728,15 @@ describe('parseSessionLog', () => {
       data: {
         turn: 1,
         step: 1,
-        firstTokenTime: 0,
+        stream: [{
+          type: 'tool-call-chunks',
+          time0: 0,
+          index: 0,
+          dt: [0],
+          id: callId,
+          name: 'read',
+          args: ['{', '}'],
+        }],
       },
     }])
   })
@@ -836,6 +786,7 @@ describe('parseSessionLog', () => {
           content: [{ type: 'text', text: 'migrated' }],
           source: { kind: 'model', provider: 'mock', model: 'mock' },
         },
+        stream: [],
       },
       surfaceOp: 'append',
     })
@@ -843,10 +794,7 @@ describe('parseSessionLog', () => {
 
   it('takes the direct v1 path and rejects v0-only message fields', () => {
     const current = projectSessionJsonl(replaySessionJsonl([TEXT_CHUNKS], { version: 1 }))
-    // v1 recorded raw chunk events; their migrated stream lives only in the
-    // sidecar a V5 store would hold, so the caller supplies that reader.
-    expect(deriveReplayScript(parseSessionLog(current), () => streamRecords(TEXT_CHUNKS)))
-      .toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
+    expect(deriveReplayScript(parseSessionLog(current))).toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
 
     const source = [
       JSON.stringify({ type: 'session', version: 1, id: 'current', createdAt: 7, delegationDepth: 0 }),
@@ -1005,39 +953,6 @@ describe('deriveReplayScript', () => {
   it('returns an empty script for a log with no Assistant stream events', () => {
     expect(deriveReplayScript([])).toEqual([])
     expect(deriveReplayScript([streamEvent(1, 1, 1, [])])).toEqual([])
-  })
-
-  it('fails loud when a V5 settlement has no sidecar stream reader', () => {
-    expect(() => deriveReplayScript([v5StreamEvent(1, 1, 1, TEXT_CHUNKS)]))
-      .toThrow(/V5 replay requires a sidecar stream reader for assistant\/message at seq 1/)
-  })
-
-  it('round-trips committed Assistant-stream fixture text in settlement order', () => {
-    const text = formatAssistantStreamFixture([
-      { seq: 5, stream: streamRecords(TEXT_CHUNKS) },
-      { seq: 2, stream: streamRecords(TEXT_CHUNKS) },
-    ])
-    const streams = parseAssistantStreamFixture(text, 'session.v5.streams.jsonl')
-    expect([...streams.keys()]).toEqual([2, 5])
-    expect(streams.get(2)).toEqual(streamRecords(TEXT_CHUNKS))
-  })
-
-  it.each([
-    ['invalid JSON', '{"seq":1,"stream":[]'],
-    ['non-object line', '[]'],
-    ['missing seq', '{"stream":[]}'],
-    ['duplicate seq', '{"seq":1,"stream":[]}\n{"seq":1,"stream":[]}\n'],
-    ['invalid stream', '{"seq":1,"stream":[{"type":"unsupported"}]}\n'],
-  ])('rejects a malformed Assistant-stream fixture: %s', (_label, text) => {
-    expect(() => parseAssistantStreamFixture(text, 'session.v5.streams.jsonl'))
-      .toThrow(/session\.v5\.streams\.jsonl: stream fixture line/)
-  })
-
-  it('expands V5 settlements through the supplied sidecar stream reader', () => {
-    const events = [v5StreamEvent(1, 1, 1, TEXT_CHUNKS), v5StreamEvent(2, 1, 2, TEXT_CHUNKS)]
-    const streams = new Map(events.map(event => [event.seq, streamRecords(TEXT_CHUNKS)] as const))
-    expect(deriveReplayScript(events, event => streams.get(event.seq)))
-      .toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }, { kind: 'chunks', chunks: TEXT_CHUNKS }])
   })
 
   it('keeps a finish-error chunk in the derived entry (replays naturally)', () => {
@@ -1266,39 +1181,6 @@ describe('deriveReplayScript', () => {
 })
 
 describe('loadReplayScript', () => {
-  it('derives a V5 fixture from a committed Assistant-stream fixture file', () => {
-    const events: SessionEvent[] = [
-      { type: 'turn/start', seq: SessionSeq(0), time: 0, data: { turn: 1 } },
-      { type: 'step/start', seq: SessionSeq(1), time: 0, data: { turn: 1, step: 1 } },
-      v5StreamEvent(2, 1, 1, TEXT_CHUNKS),
-      { type: 'step/end', seq: SessionSeq(3), time: 0, data: { turn: 1, step: 1 } },
-      { type: 'turn/end', seq: SessionSeq(4), time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
-    ]
-    writeFileSync(file, sessionJsonl(events, { version: SESSION_FORMAT_VERSION }), 'utf8')
-    const streamFile = join(dir, 'session.v5.streams.jsonl')
-    writeFileSync(streamFile, formatAssistantStreamFixture([{ seq: 2, stream: streamRecords(TEXT_CHUNKS) }]), 'utf8')
-    expect(loadReplayScript({ file, streamFiles: [streamFile] }))
-      .toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
-  })
-
-  it('derives a V5 fixture only with an explicit sidecar stream reader', () => {
-    const events: SessionEvent[] = [
-      { type: 'turn/start', seq: SessionSeq(0), time: 0, data: { turn: 1 } },
-      { type: 'step/start', seq: SessionSeq(1), time: 0, data: { turn: 1, step: 1 } },
-      v5StreamEvent(2, 1, 1, TEXT_CHUNKS),
-      { type: 'step/end', seq: SessionSeq(3), time: 0, data: { turn: 1, step: 1 } },
-      { type: 'turn/end', seq: SessionSeq(4), time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
-    ]
-    writeFileSync(file, sessionJsonl(events, { version: SESSION_FORMAT_VERSION }), 'utf8')
-    expect(() => loadReplayScript({ file })).toThrow(/V5 replay requires a sidecar stream reader/)
-    expect(loadReplayScript({
-      file,
-      readAssistantStream: event => event.type === 'assistant/message' && event.data.turn === 1
-        ? streamRecords(TEXT_CHUNKS)
-        : undefined,
-    })).toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
-  })
-
   it('derives from the session JSONL when no override is present', () => {
     writeFileSync(file, replaySessionJsonl([TEXT_CHUNKS]), 'utf8')
     expect(loadReplayScript({ file })).toEqual([{ kind: 'chunks', chunks: TEXT_CHUNKS }])
@@ -1446,8 +1328,8 @@ describe('installLlmReplay (through the real LlmRuntime)', () => {
     function scriptedCall(argumentsDelta: string): StreamChunk[] {
       return [
         { type: 'block-start', index: 0, blockType: 'tool-call' },
-        { type: 'tool-call-delta', index: 0, id: ToolCallId('c1'), name: 'update_goal', argumentsDelta },
-        { type: 'block-end', index: 0, block: { type: 'tool-call', id: ToolCallId('c1'), name: 'update_goal', arguments: argumentsDelta } },
+        { type: 'tool-call-delta', index: 0, id: brandString<ToolCallId>('c1'), name: 'update_goal', argumentsDelta },
+        { type: 'block-end', index: 0, block: { type: 'tool-call', id: brandString<ToolCallId>('c1'), name: 'update_goal', arguments: argumentsDelta } },
         { type: 'finish', reason: { kind: 'tool-calls' } },
       ]
     }
@@ -2036,8 +1918,6 @@ describe('loadSessionScripts', () => {
       id: 'child', createdAt: 200, seedLength: 6, version: 0,
     }), 'utf8')
 
-    // V0/V1 chunk rows are recovered through the historical V3 representation,
-    // so a released fixture derives without a sidecar reader.
     const scripts = loadSessionScripts({ file: f, childFiles: [childPath] })
     // The child script is ONLY the child's own model call — the parent's seeded
     // chunk is gone.
@@ -2150,7 +2030,7 @@ describe('installLlmReplay (per-session keying)', () => {
         index: 0,
         block: {
           type: 'tool-call',
-          id: ToolCallId('send-child'),
+          id: brandString<ToolCallId>('send-child'),
           name: 'send_message',
           arguments: '{"agent":"{{session:2}}"}',
         },
@@ -2171,7 +2051,7 @@ describe('installLlmReplay (per-session keying)', () => {
         index: 0,
         block: {
           type: 'tool-call',
-          id: ToolCallId('send-child'),
+          id: brandString<ToolCallId>('send-child'),
           name: 'send_message',
           arguments: '{"agent":"live-child"}',
         },

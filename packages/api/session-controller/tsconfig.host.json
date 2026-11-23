@@ -10,6 +10,7 @@
     "src/idle-release.ts",
     "src/types.ts",
     "src/remote-events.ts",
+    "src/session-resource.ts",
     "src/agent.ts",
     "src/assistant-stream.ts",
     "src/catalog.ts",

@@ -17,10 +17,10 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import type {} from '../src/index.ts'
 import { apply } from '../src/host/share-host.ts'
 
-// Relative to the test clock: a fixed anchor stops being "live" once the suite
-// ages past it, which made the verified cases expire on real days.
-const PAST = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
-const LIVE = new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString()
+// The host compares horizons with the real clock, so both instants are relative to it.
+const DAY = 24 * 60 * 60_000
+const PAST = new Date(Date.now() - DAY).toISOString()
+const LIVE = new Date(Date.now() + 30 * DAY).toISOString()
 const STORED_TOKEN = 'stored-payload.stored-signature'
 
 /**
