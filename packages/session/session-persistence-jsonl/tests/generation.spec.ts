@@ -1217,18 +1217,23 @@ describe('JSONL immutable generation publication', () => {
   it.each(['none', 'zstd'] as const)(
     'accepts a valid append on a %s target created by another migration',
     async (compression) => {
-      const root = await tempRoot()
-      const request = options(root, compression)
       const source = compression === 'zstd'
         ? await encodeZstd(0, [event0])
         : Buffer.from(line(header(0)) + line(event0))
-      const expected = compression === 'zstd'
-        ? await encodeZstd(SESSION_FORMAT_VERSION, [event0])
-        : Buffer.from(line(header(SESSION_FORMAT_VERSION)) + line(event0))
+      // Produce the migrated target with the backend writer itself: the
+      // verification compares exact staged bytes, and a compressed frame
+      // depends on the encoder's streaming layout.
+      const scratchRoot = await tempRoot()
+      const scratch = options(scratchRoot, compression)
+      await writeFile(scratch.sourcePath, source)
+      await ensureJsonlGenerationCurrent(scratch)
+      const expected = await readFile(scratch.currentPath)
       const appended = compression === 'zstd'
         ? await compressZstdFrame(line(event1))
         : Buffer.from(line(event1))
       const winner = Buffer.concat([expected, appended])
+      const root = await tempRoot()
+      const request = options(root, compression)
       await writeFile(request.sourcePath, source)
       await writeFile(request.currentPath, winner)
 
