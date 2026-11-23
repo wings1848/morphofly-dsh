@@ -285,6 +285,13 @@ export interface Config {
   readonly nativeOpen?: boolean
   /** Positive integral milliseconds of list work before yielding between complete rows. */
   readonly listWorkSliceMs?: number
+  /**
+   * Non-negative integral milliseconds an activated Agent may stay idle before
+   * the Web host releases it; `0` keeps every activated Agent resident.
+   */
+  readonly idleReleaseGraceMs?: number
+  /** Positive integral milliseconds between idle release scans; ignored when release is disabled. */
+  readonly idleReleaseSweepMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-api-session-controller -->
@@ -2592,7 +2599,7 @@ export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['
 
 - `inject`: `llm`
 - `refs`: [`LlmModelBadge`](../packages/llm/llm/src/index.ts) · [`ModelModality`](../packages/llm/llm/src/index.ts) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · [`SystemPromptUpdate`](../packages/llm/llm/src/index.ts) · [`ToolUpdate`](../packages/llm/llm/src/index.ts)
-- `source`: [`packages/test-support/llm-replay/src/index.ts:1116`](../packages/test-support/llm-replay/src/index.ts)
+- `source`: [`packages/test-support/llm-replay/src/index.ts:1396`](../packages/test-support/llm-replay/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: the {@link ReplayConfig} inputs, each defaulting to its `DSH_SNAPSHOT_*` env var in `apply`. */
@@ -2611,6 +2618,8 @@ export interface Config {
   providers?: ReplayProviderConfig[]
   /** Optional per-chunk pacing delay in ms (see {@link ReplayConfig.paceMs}); absent keeps burst yield. */
   paceMs?: number
+  /** Committed Assistant-stream fixture paths per session role; defaults to `$DSH_SNAPSHOT_STREAM_FILES`. */
+  streamFiles?: readonly string[]
 }
 
 /** One provider route exposed by the replay adapter. */
@@ -3515,7 +3524,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-session-log-export`
 
 - `inject`: `commands` · `connection`
-- `source`: [`packages/session-query/session-log-export/src/index.ts:48`](../packages/session-query/session-log-export/src/index.ts)
+- `source`: [`packages/session-query/session-log-export/src/index.ts:49`](../packages/session-query/session-log-export/src/index.ts)
 
 ```ts config-catalog
 /** Session-log archive policy. */
@@ -3534,7 +3543,7 @@ export type SessionLogCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
 
 ## `@deepseek-ai/dsh-session-persistence-jsonl`
 
-- `source`: [`packages/session/session-persistence-jsonl/src/index.ts:107`](../packages/session/session-persistence-jsonl/src/index.ts)
+- `source`: [`packages/session/session-persistence-jsonl/src/index.ts:102`](../packages/session/session-persistence-jsonl/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config for the JSONL backend's root, physical encoding, and listing concurrency. */
@@ -3561,27 +3570,6 @@ export interface Config {
 export type JsonlCompression = 'zstd' | 'none'
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-session-persistence-jsonl -->
-
-<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-session-persistence-sqlite -->
-<a id="deepseek-aidsh-session-persistence-sqlite"></a>
-
-## `@deepseek-ai/dsh-session-persistence-sqlite`
-
-- `refs`: [`JsonlConfigOptions`](#deepseek-aidsh-session-persistence-jsonl)
-- `source`: [`packages/session/session-persistence-sqlite/src/index.ts:19`](../packages/session/session-persistence-sqlite/src/index.ts)
-
-```ts config-catalog
-/** Storage root, JSONL settings used when importing legacy Sessions, and the frame size for new writes. */
-export interface Config extends JsonlConfigOptions {
-  /**
-   * Maximum events stored per frame. One frame is the unit of compression and
-   * of decoding, so this bounds both the compression ratio and the cost of
-   * reading a slice; stored frames keep the size they were written with.
-   */
-  frameEvents?: number
-}
-```
-<!-- END GENERATED config-catalog:@deepseek-ai/dsh-session-persistence-sqlite -->
 
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-session-projection-cache -->
 <a id="deepseek-aidsh-session-projection-cache"></a>
@@ -3615,7 +3603,7 @@ export interface Config {
 
 - `inject`: `sessions` · `sessionProjections`
 - `refs`: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
-- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:92`](../packages/session-query/session-query-sqlite/src/index.ts)
+- `source`: [`packages/session-query/session-query-sqlite/src/index.ts:96`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 ```ts config-catalog
 /** Combined session-query configuration backed by SQLite full-text search. */
@@ -3646,6 +3634,12 @@ export interface Config extends SessionQueryConfig {
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
   preparedSessionCacheSize?: number
+  /** Estimated heap bytes the inherited reader retains for unpinned cold observations. Defaults to 128 MiB. */
+  preparedSessionCacheBytes?: number
+  /** Share of free V8 heap one cold open may estimate before it is refused. Defaults to 0.5. */
+  coldOpenHeapShare?: number
+  /** Estimated heap bytes per stored artifact byte for a cold open. Defaults to 8. */
+  coldOpenHeapMultiplier?: number
 }
 
 /** SQLite module/handle opening phase; `never` disables full-text search entirely. */
@@ -5809,6 +5803,7 @@ export interface Config {
 | `@deepseek-ai/dsh-session-format-v1-to-v2` | — | [`packages/session/session-format-v1-to-v2/src/index.ts`](../packages/session/session-format-v1-to-v2/src/index.ts) |
 | `@deepseek-ai/dsh-session-format-v2-to-v3` | — | [`packages/session/session-format-v2-to-v3/src/index.ts`](../packages/session/session-format-v2-to-v3/src/index.ts) |
 | `@deepseek-ai/dsh-session-format-v3-to-v4` | — | [`packages/session/session-format-v3-to-v4/src/index.ts`](../packages/session/session-format-v3-to-v4/src/index.ts) |
+| `@deepseek-ai/dsh-session-format-v4-to-v5` | — | [`packages/session/session-format-v4-to-v5/src/index.ts`](../packages/session/session-format-v4-to-v5/src/index.ts) |
 | `@deepseek-ai/dsh-session-snapshot` | — | [`packages/test-support/session-snapshot/src/index.ts`](../packages/test-support/session-snapshot/src/index.ts) |
 | `@deepseek-ai/dsh-session-telemetry` | — | [`packages/session/session-telemetry/src/index.ts`](../packages/session/session-telemetry/src/index.ts) |
 | `@deepseek-ai/dsh-session-title-llm` | — | [`packages/session/session-title-llm/src/index.ts`](../packages/session/session-title-llm/src/index.ts) |
