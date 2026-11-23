@@ -9,7 +9,9 @@ const clients: TestClient[] = []
 const expired: (() => Promise<TestClient>)[] = []
 
 afterAll(async () => {
-  expect(clients).toHaveLength(2)
+  // A retried test runs again in this module scope and appends its attempt's
+  // clients, so the count grows with attempts; every one must still be disposed.
+  expect(clients.length).toBeGreaterThanOrEqual(2)
   for (const client of clients) {
     expect(client.ctx.get('loader')).toBeUndefined()
     expect(client.mock.log.streams('$events').map(stream => stream.state)).toEqual(['cancelled'])
