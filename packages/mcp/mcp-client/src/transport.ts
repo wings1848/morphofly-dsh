@@ -7,9 +7,8 @@
  */
 
 import type { AuthProvider, FetchLike, Transport } from '@modelcontextprotocol/client'
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
+import { loadSdk, loadStdio } from './sdk.ts'
 import type { Config } from './index.ts'
 
 /**
@@ -30,21 +29,25 @@ function buildChildEnv(extra: Record<string, string>): Record<string, string> {
  * @param authProvider - optional passive OAuth token and refresh callbacks.
  * @returns an unstarted MCP transport (stdio or Streamable HTTP).
  */
-export function createTransport(config: Config, fetch?: FetchLike, authProvider?: AuthProvider): Transport {
+export async function createTransport(config: Config, fetch?: FetchLike, authProvider?: AuthProvider): Promise<Transport> {
   switch (config.transport) {
-    case 'stdio':
+    case 'stdio': {
+      const { StdioClientTransport } = await loadStdio()
       return new StdioClientTransport({
         command: config.command,
         args: config.args,
         env: buildChildEnv(config.env),
         cwd: config.cwd,
       })
-    case 'streamable-http':
+    }
+    case 'streamable-http': {
+      const { StreamableHTTPClientTransport } = await loadSdk()
       return new StreamableHTTPClientTransport(
         new URL(config.url),
         { requestInit: { headers: config.headers }, ...fetch === undefined ? {} : { fetch },
           ...authProvider === undefined ? {} : { authProvider, onInsufficientScope: 'throw' },
         },
       )
+    }
   }
 }

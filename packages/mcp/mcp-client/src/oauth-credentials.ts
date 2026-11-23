@@ -3,46 +3,71 @@ import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialKey, credentialKeyId, credentialKeyScope, parseCredentialKey } from '@deepseek-ai/dsh-credentials'
 import type { CredentialKey, CredentialRecord } from '@deepseek-ai/dsh-credentials'
-import { OAuthClientInformationFullSchema, OAuthClientInformationSchema, OAuthMetadataSchema, OAuthTokensSchema, OpenIdProviderMetadataSchema } from '@modelcontextprotocol/core'
-import { refreshAuthorization } from '@modelcontextprotocol/client'
 import type { AuthProvider, FetchLike, StoredOAuthClientInformation } from '@modelcontextprotocol/client'
 import z from 'zod'
 import { McpAuthorizationRequired, McpLocalError, oauthFailure } from './diagnostic.ts'
+import { loadCore, loadSdk } from './sdk.ts'
+import type { McpCore } from './sdk.ts'
 import type { McpOAuthConfig } from './oauth-options.ts'
 import { OAuthSchema } from './oauth-options.ts'
 
-const ClientRecordSchema = z.object({
-  version: z.literal(1),
-  type: z.literal('mcp-oauth-client'),
-  issuer: z.string(),
-  information: OAuthClientInformationFullSchema.or(OAuthClientInformationSchema),
-})
+/** Record schemas built from the loaded core protocol schemas. */
+type RecordSchemas = ReturnType<typeof schemasFrom>
 
-const GrantSchema = z.object({
-  version: z.literal(1),
-  type: z.literal('mcp-oauth-grant'),
-  id: z.uuid(),
-  serverUrl: z.url(),
-  issuer: z.string(),
-  clientKey: z.string(),
-  clientId: z.string(),
-  configuredClientId: z.string().optional(),
-  configuredScope: z.string().optional(),
-  resource: z.url().optional(),
-  metadata: OAuthMetadataSchema.or(OpenIdProviderMetadataSchema).optional(),
-  tokens: OAuthTokensSchema,
-  expiresAt: z.number().optional(),
-})
+/** One in-flight schema construction shared by every record path. */
+let recordSchemasLoad: Promise<RecordSchemas> | undefined
+
+/**
+ * Build the durable record schemas over the core module's protocol schemas.
+ * @param core - the loaded MCP core schemas.
+ * @returns the client-information and grant schemas.
+ */
+function schemasFrom(core: McpCore) {
+  return {
+    clientRecord: z.object({
+      version: z.literal(1),
+      type: z.literal('mcp-oauth-client'),
+      issuer: z.string(),
+      information: core.OAuthClientInformationFullSchema.or(core.OAuthClientInformationSchema),
+    }),
+    grant: z.object({
+      version: z.literal(1),
+      type: z.literal('mcp-oauth-grant'),
+      id: z.uuid(),
+      serverUrl: z.url(),
+      issuer: z.string(),
+      clientKey: z.string(),
+      clientId: z.string(),
+      configuredClientId: z.string().optional(),
+      configuredScope: z.string().optional(),
+      resource: z.url().optional(),
+      metadata: core.OAuthMetadataSchema.or(core.OpenIdProviderMetadataSchema).optional(),
+      tokens: core.OAuthTokensSchema,
+      expiresAt: z.number().optional(),
+    }),
+  }
+}
+
+/**
+ * Load the durable record schemas on demand.
+ * @returns the schemas, built once from the core module.
+ */
+function recordSchemas(): Promise<RecordSchemas> {
+  return recordSchemasLoad ??= loadCore().then(schemasFrom).catch((error: unknown) => {
+    recordSchemasLoad = undefined
+    throw error
+  })
+}
 
 /** Committed tokens bound to one authorization identity and resolved MCP endpoint. */
-export type McpOAuthGrant = z.infer<typeof GrantSchema>
+export type McpOAuthGrant = z.infer<RecordSchemas['grant']>
 
 /**
  * Encode an OAuth payload for the credential provider's opaque record storage.
  * @param payload - validated grant or client information.
  * @returns a JSON-compatible credential record, omitting absent optional fields.
  */
-export function oauthRecord(payload: McpOAuthGrant | z.infer<typeof ClientRecordSchema>): CredentialRecord {
+export function oauthRecord(payload: McpOAuthGrant | z.infer<RecordSchemas['clientRecord']>): CredentialRecord {
   return { kind: 'grant', payload: JSON.parse(JSON.stringify(payload)) }
 }
 
@@ -120,7 +145,7 @@ export class McpOAuthCredentials {
   async client(key: CredentialKey, issuer: string): Promise<StoredOAuthClientInformation | undefined> {
     const record = await this.store().readRecord(key)
     if (record === undefined) return undefined
-    const parsed = record.kind === 'grant' ? ClientRecordSchema.safeParse(record.payload) : undefined
+    const parsed = record.kind === 'grant' ? (await recordSchemas()).clientRecord.safeParse(record.payload) : undefined
     if (!parsed?.success || parsed.data.issuer !== issuer) throw new McpAuthorizationRequired('binding')
     return { ...parsed.data.information, issuer }
   }
@@ -133,9 +158,9 @@ export class McpOAuthCredentials {
    * @param signal - attempt lifetime.
    */
   async saveClient(key: CredentialKey, issuer: string, information: StoredOAuthClientInformation, signal: AbortSignal): Promise<void> {
-    await this.store().modifyRecord(key, (current) => {
+    await this.store().modifyRecord(key, async (current) => {
       signal.throwIfAborted()
-      if (current !== undefined && (current.kind !== 'grant' || !ClientRecordSchema.safeParse(current.payload).success)) {
+      if (current !== undefined && (current.kind !== 'grant' || !(await recordSchemas()).clientRecord.safeParse(current.payload).success)) {
         throw new McpLocalError('MCP OAuth client record is incompatible', 'MCP_OAUTH_FAILED')
       }
       return Promise.resolve(oauthRecord({ version: 1, type: 'mcp-oauth-client', issuer, information }))
@@ -150,9 +175,9 @@ export class McpOAuthCredentials {
     if (this.config.clientId === undefined) await this.store().deleteRecord(key)
   }
 
-  private parse(record: CredentialRecord | undefined, serverUrl: string): McpOAuthGrant {
+  private async parse(record: CredentialRecord | undefined, serverUrl: string): Promise<McpOAuthGrant> {
     if (record === undefined) throw new McpAuthorizationRequired('missing')
-    const parsed = record.kind === 'grant' ? GrantSchema.safeParse(record.payload) : undefined
+    const parsed = record.kind === 'grant' ? (await recordSchemas()).grant.safeParse(record.payload) : undefined
     if (!parsed?.success) throw new McpAuthorizationRequired('binding')
     const grant = parsed.data
     if (grant.serverUrl !== serverUrl || grant.configuredClientId !== this.config.clientId || grant.configuredScope !== this.config.scope) {
@@ -172,18 +197,19 @@ export class McpOAuthCredentials {
   async read(serverUrl: string, signal: AbortSignal): Promise<McpOAuthGrant> {
     const record = await this.store().readRecord(this.key)
     signal.throwIfAborted()
-    return this.parse(record, serverUrl)
+    return await this.parse(record, serverUrl)
   }
 
   private async refresh(bound: McpOAuthGrant, token: string, signal: AbortSignal): Promise<McpOAuthGrant> {
     const record = await this.store().modifyRecord(this.key, async (record) => {
       signal.throwIfAborted()
-      const current = this.parse(record, bound.serverUrl)
+      const current = await this.parse(record, bound.serverUrl)
       if (current.id !== bound.id) throw new McpAuthorizationRequired('binding')
       if (current.tokens.access_token !== token) return undefined
       if (current.tokens.refresh_token === undefined) throw new McpAuthorizationRequired('expired')
       const client = await this.client(parseCredentialKey(current.clientKey), current.issuer)
       if (client?.client_id !== current.clientId) throw new McpAuthorizationRequired('binding')
+      const { refreshAuthorization } = await loadSdk()
       const tokens = await refreshAuthorization(current.issuer, {
         ...current.metadata === undefined ? {} : { metadata: current.metadata },
         clientInformation: client,
@@ -197,7 +223,7 @@ export class McpOAuthCredentials {
       })
     })
     signal.throwIfAborted()
-    return this.parse(record, bound.serverUrl)
+    return await this.parse(record, bound.serverUrl)
   }
 
   /**

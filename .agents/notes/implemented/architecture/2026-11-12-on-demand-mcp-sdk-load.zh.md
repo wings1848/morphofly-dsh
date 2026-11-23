@@ -10,7 +10,9 @@ Status: implemented
 
 ## 决策
 
-[`src/sdk.ts`](../../../../packages/mcp/mcp-client/src/sdk.ts) 拥有两个加载器 `loadSdk` 与 `loadStdio`。两者在首次使用时导入各自入口并缓存该 Promise，因此并发连接共用同一次导入，且失败的导入不会留下被缓存的拒绝。连接监督器、探测、工具执行与传输工厂都等待它们；`createTransport` 因此是异步的，因为传输类来自已加载的模块。
+[`src/sdk.ts`](../../../../packages/mcp/mcp-client/src/sdk.ts) 拥有四个加载器——`loadSdk`、`loadCore`、`loadStdio` 与 `loadValidators`——覆盖拆分后的 `@modelcontextprotocol/*` 入口。各加载器在首次使用时导入对应入口并缓存该 Promise，因此并发连接共用同一次导入，且失败的导入不会留下被缓存的拒绝。连接监督器、探测、工具桥接、OAuth 记录与刷新路径以及传输工厂都等待它们；`createTransport` 因此是异步的，因为传输类来自已加载的模块。
+
+[`src/diagnostic.ts`](../../../../packages/mcp/mcp-client/src/diagnostic.ts) 通过 SDK 自带的 `Symbol.for('mcp.sdk.errorBrands')` 品牌来判定 SDK 错误，而不是导入其错误类，因此错误报告不会重新引入启动期导入。`SdkErrorCode` 与 `OAuthErrorCode` 的线上取值同样保持字面量；工具桥接在首次使用时才加载 `specTypeSchemas` 与 AJV 校验器。
 
 单飞（single-flight）是决策的一部分，不是可有可无的缓存。在异步 `vi.mock` 工厂下，对同一模块的两次并发 `import()` 解析结果不一致：一个调用方拿到原模块，另一个拿到 mock。探测用例测得 `['FakeClient', 'Client']`，拿到真实 `Client` 的那次调用从不触发 mock 的 connect，双实例生命周期测试因此挂起到超时。共用一次导入消除了该竞态，同时去掉了工具执行器里每次执行的导入。
 
@@ -22,4 +24,4 @@ Status: implemented
 
 ## 后果
 
-没有配置 MCP 服务器的 Host 不再求值 SDK。本地构建上，`dsh web` 稳定驻留内存从 195–200 MiB 降到 188–191 MiB（各三次，同机同 Node 版本），解析钩子探测在启动时记录到零个 `@modelcontextprotocol/*` 加载，而不是四个。每个连接在首次尝试时付一次 SDK 求值，仍在 `startupTimeoutMs` 之内。
+没有配置 MCP 服务器的 Host 不再求值 SDK。本地构建上，`dsh web` 稳定驻留内存从 195–200 MiB 降到 188–191 MiB（各三次，同机同 Node 版本），解析钩子探测在启动时记录到零个 `@modelcontextprotocol/*` 加载，而不是四个。每个连接在首次尝试时付一次 SDK 求值，仍在 `startupTimeoutMs` 之内。0.2.3 拆分后的 `client`/`core` 包同理：实测 `@modelcontextprotocol/client` 首次导入约 255–400 ms、8.2 MiB 堆，仅在服务器真正连接时付出。

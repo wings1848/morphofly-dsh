@@ -5,11 +5,11 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { AuthorizationSession } from '@deepseek-ai/dsh-authorization'
 import type { CredentialKey } from '@deepseek-ai/dsh-credentials'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
-import { auth, exchangeAuthorization, extractWWWAuthenticateParams, OAuthError, OAuthErrorCode, validateAuthorizationResponseIssuer } from '@modelcontextprotocol/client'
 import type { OAuthClientProvider, OAuthDiscoveryState, StoredOAuthClientInformation } from '@modelcontextprotocol/client'
 import { McpTemplateBinding } from './credentials.ts'
 import { withDeadline } from './deadline.ts'
 import { McpLocalError } from './diagnostic.ts'
+import { loadSdk } from './sdk.ts'
 import { assertOAuthUrl, McpOAuthCredentials, oauthFetch, oauthRecord, safeOAuthError } from './oauth-credentials.ts'
 import type { McpOAuthGrant } from './oauth-credentials.ts'
 import type { StreamableHttpConfig } from './index.ts'
@@ -80,7 +80,6 @@ export class McpOAuthAuthorization {
       if (['starting', 'waiting-browser', 'exchanging', 'committing'].includes(previous.view.phase)) return { ...previous.view }
       await withDeadline(previous.done, this.config.closeTimeoutMs, CLEANUP_UNSETTLED)
         .catch((error: unknown) => { throw safeOAuthError(error) })
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- Retirement can occur while previous cleanup is awaited.
       if (this.closed) throw new McpLocalError('MCP OAuth authorization owner is closed', 'MCP_OAUTH_FAILED')
       if (this.attempt !== undefined && this.attempt !== previous) return { ...this.attempt.view }
     }
@@ -169,6 +168,9 @@ export class McpOAuthAuthorization {
   }
 
   private async run(attempt: Attempt, session: AuthorizationSession, webServer: WebServer): Promise<void> {
+    const {
+      OAuthError, OAuthErrorCode, auth, exchangeAuthorization, extractWWWAuthenticateParams, validateAuthorizationResponseIssuer,
+    } = await loadSdk()
     const deadline = new AbortController()
     const signal = AbortSignal.any([session.signal, deadline.signal])
     const timeout = setTimeout(() => { deadline.abort() }, this.config.oauth.authorizationTimeoutMs)

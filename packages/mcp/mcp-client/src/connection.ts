@@ -15,7 +15,6 @@
  * @module
  */
 
-import { Client } from '@modelcontextprotocol/client'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
 import { assertNever, deepEqualJson, type JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -28,6 +27,7 @@ import type { McpStatusCell } from './status.ts'
 import type { McpCloseResult } from './types.ts'
 import { McpGeneration } from './generation.ts'
 import { McpTemplateBinding } from './credentials.ts'
+import { loadSdk } from './sdk.ts'
 import { MissingTemplateValue } from './templates.ts'
 import { McpToolRegistrationError, syncTools } from './tools.ts'
 import { McpToolLoader } from './tool-loading.ts'
@@ -319,6 +319,7 @@ export function startConnection(
 
   async function connectGeneration(): Promise<void> {
     if (isStopped()) return
+    const { Client } = await loadSdk()
     const client = new Client({ name: 'dsh-mcp-client', version: '0.0.1' }, {
       capabilities: {}, versionNegotiation: { mode: 'auto' },
       listChanged: { tools: { autoRefresh: false, debounceMs: 0, onChanged: () => { void refreshTools() } } },

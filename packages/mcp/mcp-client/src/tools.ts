@@ -14,8 +14,8 @@
 
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import { specTypeSchemas, type Client, type ImageContent, type JsonSchemaType, type Tool } from '@modelcontextprotocol/client'
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv'
+import type { Client, ImageContent, JsonSchemaType, Tool } from '@modelcontextprotocol/client'
+import type { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv'
 import type { Context } from '@deepseek-ai/cordis'
 import { isImageAdmissionError } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageAttachmentRef, ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
@@ -26,6 +26,7 @@ import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { describeError, McpLocalError, mcpRequestError, McpToolError } from './diagnostic.ts'
 import type { McpToolLoader } from './tool-loading.ts'
+import { loadSdk, loadValidators } from './sdk.ts'
 
 /** Resolved options relevant to tool bridging. */
 export interface ToolBridgeOptions {
@@ -153,6 +154,7 @@ export async function syncTools(
   const response = client.getServerCapabilities()?.tools === undefined
     ? { tools: [] }
     : await client.listTools(undefined, { cacheMode: 'refresh', signal: opts.signal })
+  const { AjvJsonSchemaValidator } = await loadValidators()
   const outputValidators = new AjvJsonSchemaValidator()
   for (const tool of response.tools) {
     const publicName = publicToolName(opts.serverName, tool.name)
@@ -399,6 +401,7 @@ function createExecutor(
     // string/number/null). Fallback to {} lets the MCP server produce a
     // specific "missing required param" error the model can learn from.
     const argsObj = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>
+    const { specTypeSchemas } = await loadSdk()
     const parsed = specTypeSchemas.CallToolResult['~standard'].validate(await options.call(argsObj, exec))
     if (parsed.issues !== undefined) {
       throw new McpToolError(`Tool "${rawName}" returned an invalid MCP result: ${parsed.issues.map(issue => issue.message).join('; ')}`, 'MCP_INVALID_RESULT')

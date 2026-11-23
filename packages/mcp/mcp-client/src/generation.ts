@@ -32,9 +32,9 @@ export class McpGeneration {
    * @param authProvider - optional passive OAuth callbacks, tracked through actual settlement.
    * @returns completion of negotiation, or cancellation/deadline rejection.
    */
-  connect(config: Config, timeoutMs: number | undefined, fetch?: FetchLike, authProvider?: Required<AuthProvider>): Promise<void> {
+  async connect(config: Config, timeoutMs: number | undefined, fetch?: FetchLike, authProvider?: Required<AuthProvider>): Promise<void> {
     this.lifetime.signal.throwIfAborted()
-    const transport = this.transport = createTransport(config, fetch, authProvider === undefined ? undefined : {
+    const transport = this.transport = await createTransport(config, fetch, authProvider === undefined ? undefined : {
       token: () => this.run(() => authProvider.token()),
       onUnauthorized: context => this.run(() => authProvider.onUnauthorized(context)),
     })
