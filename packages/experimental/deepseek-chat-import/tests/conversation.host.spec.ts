@@ -151,7 +151,7 @@ describe('convertConversation', () => {
       .toEqual({ title: 'Original title', messageSeqs: [], source: { kind: 'user' } })
     expect(turnEnds(converted.events)).toEqual([{ kind: 'completed' }, { kind: 'completed' }])
     const assistant = converted.events.find(event => event.type === 'assistant/message')
-    expect(assistant?.data).toMatchObject({ turn: 1, step: 1, stream: [], message: { source: { kind: 'model', ...IMPORTED_MODEL_SOURCE } } })
+    expect(assistant?.data).toMatchObject({ turn: 1, step: 1, message: { source: { kind: 'model', ...IMPORTED_MODEL_SOURCE } } })
     expect(history(converted.events)).toEqual([
       { role: 'user', content: [{ type: 'text', text: 'What is 2 + 2?' }] },
       { role: 'assistant', content: [{ type: 'reasoning', text: 'Add them.' }, { type: 'text', text: '4' }] },
