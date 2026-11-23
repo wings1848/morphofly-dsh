@@ -82,17 +82,17 @@ jobs:
       # 16-core enterprise runners upstream uses.
       - name: Build the native system addon
         run: pnpm run build:native-system
+      # DSH_FORK_CI_EXEMPT removes the capability-dependent suites inside
+      # vitest.config.ts: `vitest --exclude` does not reach per-project include
+      # resolution (scripts/fork-ci-exempt.ts).
       - name: Unit suite
+        env:
+          DSH_FORK_CI_EXEMPT: '1'
         run: |
           pnpm exec vitest run \
             --testTimeout=30000 \
             --hookTimeout=120000 \
-            --retry=2 \
-            --exclude 'packages/sandbox/**' \
-            --exclude 'packages/ptc-runtime/ptc-runtime-node/**' \
-            --exclude 'packages/workflow/workflow-ptc/**' \
-            --exclude 'packages/experimental/client-ui-forge/**' \
-            --exclude 'packages/experimental/forge-github/**'
+            --retry=2
 
   build:
     name: build artifacts
