@@ -1097,7 +1097,7 @@ describe('compaction region transaction', () => {
     const session = conversation(3, undefined, 'PROTECTED SYSTEM')
     const nodes = [...session.surface.nodes]
     await expect(compact.compactRegion(nodes[0]!, nodes[3]!, agent(session, MODEL), SIGNAL))
-      .rejects.toThrow(/node 0 holds the system prompt/)
+      .rejects.toThrow('protected initial system message')
 
     expect(session.surface.nodes).toEqual(nodes)
     const end = session.snapshotEvents().findLast(event => event.type === 'compaction/end')
@@ -1536,7 +1536,7 @@ describe('default one-shot summarizer', () => {
 
   it('resolves the latest routed provider/model before the AgentOptions pair', async () => {
     const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }], undefined, 'routed')
-    const session = conversation(1)
+    const session = Session.create(SessionId('unanswered-route'))
     session.append('request/header', {
       header: { config: { provider: 'routed', model: 'routed' } },
       reason: 'initial',

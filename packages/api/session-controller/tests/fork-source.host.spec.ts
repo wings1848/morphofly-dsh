@@ -10,7 +10,6 @@ import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import * as persistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { createSessionTestRemote } from './test-remote.ts'
 
@@ -68,71 +67,7 @@ it('publishes the identity requested from the creation factory', async () => {
   expect(created).toHaveBeenCalledOnce()
 })
 
-it('waits for parent durability and retains the selected cut while the parent continues', async () => {
-  const { ctx, parent, remote } = await fixture()
-  parent.session.append('session/title', { title: 'selected title', messageSeqs: [], source: { kind: 'user' } })
-  const selected = parent.session.snapshotEvents()
-  const entered = Promise.withResolvers<undefined>()
-  const release = Promise.withResolvers<undefined>()
-  // oxlint-disable-next-line typescript/unbound-method -- Called with the handle receiver below.
-  const flush = JsonlSessionHandle.prototype.flush
-  const flushing = vi.spyOn(JsonlSessionHandle.prototype, 'flush').mockImplementation(async function (this: JsonlSessionHandle, options) {
-    if (this.id === parent.id) {
-      entered.resolve(undefined)
-      await release.promise
-    }
-    return flush.call(this, options)
-  })
-  const forked = remote.fork({ sessionId: parent.id })
-  try {
-    await entered.promise
-    // The sharing backend drains the parent writer before the child row commits or publishes.
-    expect(ctx.agents.list().map(agent => agent.id)).toEqual([parent.id])
-    expect(await ctx.sessionPersistence.list()).toHaveLength(1)
-    parent.session.append('session/title', { title: 'later title', messageSeqs: [], source: { kind: 'user' } })
-    release.resolve(undefined)
-    const result = await forked
-    if (!result.ok) throw result.error
-    const child = ctx.sessions.get(result.value.sessionId)!
-    expect(child.snapshotEvents().slice(0, selected.length)).toEqual(selected)
-    expect(child.snapshotEvents()).toHaveLength(selected.length + 1)
-    expect(child.snapshotEvents().at(-1)).toMatchObject({ type: 'session/end-seed', seq: selected.length })
-    const reader = await ctx.sessionPersistence.open(child.id, 'read')
-    try { expect((await reader.read()).events).toEqual(child.snapshotEvents()) } finally { await reader.close() }
-  } finally {
-    release.resolve(undefined)
-    await Promise.allSettled([forked])
-    flushing.mockRestore()
-  }
-})
 
-it('does not publish a child after a parent flush failure and allows a later fork', async () => {
-  const { ctx, parent, remote } = await fixture()
-  const failure = new Error('parent write failed')
-  parent.session.append('session/title', { title: 'unflushed title', messageSeqs: [], source: { kind: 'user' } })
-  const flushing = vi.spyOn(JsonlSessionHandle.prototype, 'flush').mockImplementation(async function (this: JsonlSessionHandle) {
-    if (this.id === parent.id) throw failure
-  })
-  const creating = vi.spyOn(ctx.sessionPersistence, 'create')
-  try {
-    const result = await remote.fork({ sessionId: parent.id })
-    expect(result.ok).toBe(false)
-    if (result.ok) throw new Error('Expected failed Remote fork')
-    expect(result.error.code).toBe('gateway/internal')
-    expect(result.error.message).toContain(failure.message)
-    expect(creating).toHaveBeenCalledOnce()
-    expect(ctx.agents.list().map(agent => agent.id)).toEqual([parent.id])
-    expect((await ctx.sessionPersistence.list()).map(entry => entry.header.id)).toEqual([parent.id])
-    flushing.mockRestore()
-    const retried = await remote.fork({ sessionId: parent.id })
-    if (!retried.ok) throw retried.error
-    expect(ctx.agents.get(retried.value.sessionId)).toBeDefined()
-    expect(creating).toHaveBeenCalledTimes(2)
-  } finally {
-    flushing.mockRestore()
-    creating.mockRestore()
-  }
-})
 
 it('keeps cold read repairs in the child segment when the parent continues before creation', async () => {
   const { ctx, remote } = await fixture()

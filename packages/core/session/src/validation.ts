@@ -171,7 +171,7 @@ function assertCurrentLlmShape(event: Record<string, unknown>, index: number): v
   }
 }
 
-/** Validate fields used directly by restored Session lifecycle logic without replaying the embedded stream. */
+/** Validate the scalar settlement fields restored Session lifecycle logic and folds read. */
 function assertAssistantSettlementShape(
   data: Record<string, unknown> | undefined,
   type: 'assistant/attempt' | 'assistant/message',
@@ -179,9 +179,11 @@ function assertAssistantSettlementShape(
 ): void {
   const turn = data?.['turn']
   const step = data?.['step']
+  const firstTokenTime = data?.['firstTokenTime']
   if (typeof turn !== 'number' || !Number.isSafeInteger(turn) || turn < 0 || Object.is(turn, -0)
     || typeof step !== 'number' || !Number.isSafeInteger(step) || step < 0 || Object.is(step, -0)
-    || !Array.isArray(data?.['stream'])) {
+    || (firstTokenTime !== undefined
+      && (typeof firstTokenTime !== 'number' || !Number.isSafeInteger(firstTokenTime) || firstTokenTime < 0))) {
     throw new Error(`seed ${type} at index ${index} has invalid settlement fields`)
   }
 }
