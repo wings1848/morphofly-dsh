@@ -1,29 +1,26 @@
-/** Fork creation stores the supplied history; a sharing backend persists the parent prefix first. */
+/** Fork creation stores the supplied history; the JSONL backend persists the parent prefix first. */
 import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { SessionId, SessionSeq, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import * as persistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import * as sqlitePersistence from '@deepseek-ai/dsh-session-persistence-sqlite'
-import { storedEvents, tailSegment } from '../../../session/session-persistence-sqlite/tests/fixtures/store.ts'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 
-async function fixture(storage: 'sqlite' | 'jsonl' = 'sqlite') {
+async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-agent-fork-source-'))
   const ctx = new Context()
   onTestFinished(async () => { try { await ctx.fiber.dispose() } finally { await rm(root, { recursive: true, force: true }) } })
   await mountAgentLoopTestDependencies(ctx)
-  await ctx.plugin(storage === 'sqlite' ? sqlitePersistence : persistence, { root, compression: 'none' })
+  await ctx.plugin(persistence, { root, compression: 'none' })
   await mountAgentLoopTestHarness(ctx)
   return { ctx, root }
 }
 
-it.each(['sqlite', 'jsonl'] as const)('stores a prepared open-prefix seed without changing its marker or repair order (%s)', async (storage) => {
-  const { ctx } = await fixture(storage)
+it('stores a prepared open-prefix seed without changing its marker or repair order', async () => {
+  const { ctx } = await fixture()
   const parent = ctx.sessions.create(SessionId('parent'))
   const writer = await ctx.sessionPersistence.create(parent.header)
   onTestFinished(() => writer.close())
@@ -49,7 +46,7 @@ it.each(['sqlite', 'jsonl'] as const)('stores a prepared open-prefix seed withou
 })
 
 it('continues a JSONL child from its creation history while the parent keeps writing', async () => {
-  const { ctx } = await fixture('jsonl')
+  const { ctx } = await fixture()
   const parent = ctx.sessions.create(SessionId('parent'))
   const writer = await ctx.sessionPersistence.create(parent.header)
   onTestFinished(() => writer.close())
@@ -80,7 +77,7 @@ it('continues a JSONL child from its creation history while the parent keeps wri
 })
 
 it.each([0, 1, 2, 4])('flushes the selected prefix with initial durable count %s before later parent writes', async (persistedCount) => {
-  const { ctx, root } = await fixture()
+  const { ctx } = await fixture()
   const parent = ctx.sessions.create(SessionId('parent'))
   const writer = await ctx.sessionPersistence.create(parent.header)
   onTestFinished(() => writer.close())
@@ -112,15 +109,7 @@ it.each([0, 1, 2, 4])('flushes the selected prefix with initial durable count %s
   expect(child.agent.session.inheritedEventCount).toBe(2)
   expect(child.agent.session.snapshotEvents().slice(0, 2)).toEqual(prefix)
   await child.dispose()
-  const db = new DatabaseSync(join(root, '.segments/sessions.sqlite'))
-  try {
-    const tail = db.prepare('SELECT parent_end_seq, base_seq FROM segments WHERE segment_uuid = (SELECT tail_segment_uuid FROM traces WHERE trace_uuid = ?)').get(child.agent.id)
-    expect(tail).toMatchObject({ parent_end_seq: prefix.length, base_seq: prefix.length })
-    expect(storedEvents(db, tailSegment(db, child.agent.id))).toMatchObject([
-      { type: 'session/end-seed', seq: 2, data: { inherited: true } },
-    ])
-    expect((await ctx.sessionPersistence.stat(parent.id))?.eventCount).toBe(6)
-  } finally { db.close() }
+  expect((await ctx.sessionPersistence.stat(parent.id))?.eventCount).toBe(6)
   const reader = await ctx.sessionPersistence.open(child.agent.id, 'read')
   try { expect((await reader.read()).events).toEqual(child.agent.session.snapshotEvents()) } finally { await reader.close() }
 })

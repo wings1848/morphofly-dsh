@@ -3,15 +3,14 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
-import * as persistence from '@deepseek-ai/dsh-session-persistence-sqlite'
+import * as persistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { SqliteSessionHandle } from '../../../session/session-persistence-sqlite/src/sqlite.ts'
+import { JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { createSessionTestRemote } from './test-remote.ts'
 
@@ -30,7 +29,7 @@ async function fixture() {
   await parent.whenIdle()
   await ctx.sessions.flush(parent.session)
   const remote = await createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'mock', model: 'mock' }), cwd: tmpdir() })
-  return { ctx, parent, remote, root }
+  return { ctx, parent, remote }
 }
 
 it('releases child storage when the creation setup fails', async () => {
@@ -70,14 +69,14 @@ it('publishes the identity requested from the creation factory', async () => {
 })
 
 it('waits for parent durability and retains the selected cut while the parent continues', async () => {
-  const { ctx, parent, remote, root } = await fixture()
+  const { ctx, parent, remote } = await fixture()
   parent.session.append('session/title', { title: 'selected title', messageSeqs: [], source: { kind: 'user' } })
   const selected = parent.session.snapshotEvents()
   const entered = Promise.withResolvers<undefined>()
   const release = Promise.withResolvers<undefined>()
   // oxlint-disable-next-line typescript/unbound-method -- Called with the handle receiver below.
-  const flush = SqliteSessionHandle.prototype.flush
-  const flushing = vi.spyOn(SqliteSessionHandle.prototype, 'flush').mockImplementation(async function (this: SqliteSessionHandle, options) {
+  const flush = JsonlSessionHandle.prototype.flush
+  const flushing = vi.spyOn(JsonlSessionHandle.prototype, 'flush').mockImplementation(async function (this: JsonlSessionHandle, options) {
     if (this.id === parent.id) {
       entered.resolve(undefined)
       await release.promise
@@ -100,11 +99,6 @@ it('waits for parent durability and retains the selected cut while the parent co
     expect(child.snapshotEvents().at(-1)).toMatchObject({ type: 'session/end-seed', seq: selected.length })
     const reader = await ctx.sessionPersistence.open(child.id, 'read')
     try { expect((await reader.read()).events).toEqual(child.snapshotEvents()) } finally { await reader.close() }
-    const db = new DatabaseSync(join(root, '.segments/sessions.sqlite'))
-    try {
-      expect(db.prepare('SELECT base_seq FROM segments WHERE segment_uuid = (SELECT tail_segment_uuid FROM traces WHERE trace_uuid = ?)').get(child.id))
-        .toEqual({ base_seq: selected.length })
-    } finally { db.close() }
   } finally {
     release.resolve(undefined)
     await Promise.allSettled([forked])
@@ -116,7 +110,7 @@ it('does not publish a child after a parent flush failure and allows a later for
   const { ctx, parent, remote } = await fixture()
   const failure = new Error('parent write failed')
   parent.session.append('session/title', { title: 'unflushed title', messageSeqs: [], source: { kind: 'user' } })
-  const flushing = vi.spyOn(SqliteSessionHandle.prototype, 'flush').mockImplementation(async function (this: SqliteSessionHandle) {
+  const flushing = vi.spyOn(JsonlSessionHandle.prototype, 'flush').mockImplementation(async function (this: JsonlSessionHandle) {
     if (this.id === parent.id) throw failure
   })
   const creating = vi.spyOn(ctx.sessionPersistence, 'create')
@@ -141,7 +135,7 @@ it('does not publish a child after a parent flush failure and allows a later for
 })
 
 it('keeps cold read repairs in the child segment when the parent continues before creation', async () => {
-  const { ctx, remote, root } = await fixture()
+  const { ctx, remote } = await fixture()
   const parent = Session.create(SessionId('cold-parent'))
   parent.append('turn/start', { turn: 1 })
   const writer = await ctx.sessionPersistence.create(parent.header)
@@ -172,9 +166,4 @@ it('keeps cold read repairs in the child segment when the parent continues befor
   ])
   const reader = await ctx.sessionPersistence.open(result.value.sessionId, 'read')
   try { expect((await reader.read()).events).toEqual(child?.snapshotEvents()) } finally { await reader.close() }
-  const db = new DatabaseSync(join(root, '.segments/sessions.sqlite'))
-  try {
-    expect(db.prepare('SELECT base_seq FROM segments WHERE segment_uuid = (SELECT tail_segment_uuid FROM traces WHERE trace_uuid = ?)').get(result.value.sessionId))
-      .toEqual({ base_seq: 1 })
-  } finally { db.close() }
 })
