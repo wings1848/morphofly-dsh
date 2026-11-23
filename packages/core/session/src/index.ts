@@ -906,14 +906,11 @@ export class Session {
     }
     // Payload getters can detach the Session while the snapshots are read.
     const entry = this.publicationEntry()
-    const event = deepFreeze({
+    const event = createAppendEvent({
       type,
-      seq: SessionSeq(this.log.length),
-      time: Date.now(),
       data: dataSnapshot,
-      ...(surfaceMetadataSnapshot as { surfaceOp?: unknown; sourceEventSeqs?: unknown }),
-    } as unknown as SessionEvent<T>)
-    validateSessionEventData(event, `session event "${type}" at seq ${event.seq}`)
+      surface: surfaceMetadataSnapshot,
+    }, SessionSeq(this.log.length)) as SessionEvent<T>
     const stream = carry?.assistantStream
     if (stream !== undefined) this.pendingAssistantStreams.set(event.seq, stream)
     try {
