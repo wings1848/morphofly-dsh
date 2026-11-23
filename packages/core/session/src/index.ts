@@ -22,6 +22,7 @@ import { foldRequestHeader } from './request-header.ts'
 import { ToolHistoryProjection } from './tool-history.ts'
 import type { ToolHistory } from '@deepseek-ai/dsh-llm'
 
+import { assertMessageEventShape } from './validation.ts'
 import { buildForkSeed } from './fork.ts'
 
 export { buildForkSeed } from './fork.ts'
@@ -325,65 +326,7 @@ function isMessageEventType(type: unknown): type is SurfaceEventType {
     || type === 'assistant/message' || type === 'tool/result'
 }
 
-const MESSAGE_ROLE_BY_TYPE: Record<SurfaceEventType, Message['role']> = {
-  'system/message': 'system',
-  'developer/message': 'developer',
-  'user/message': 'user',
-  'assistant/message': 'assistant',
-  'tool/result': 'tool',
-}
-
 /** Validate only the event-specific invariants needed to safely replay a message. */
-function assertMessageEventShape(event: Record<string, unknown>, subject: string): void {
-  const type = event['type']
-  if (!isMessageEventType(type)) return
-  const data = event['data']
-  const record = typeof data === 'object' && data !== null
-    ? data as Record<string, unknown>
-    : undefined
-  const message = type === 'user/message' ? record : record?.['message']
-  if (typeof message !== 'object' || message === null
-    || typeof (message as Record<string, unknown>)['id'] !== 'string'
-    || (message as Record<string, unknown>)['id'] === '') {
-    throw new Error(`${subject} lacks an identified message`)
-  }
-  const messageRecord = message as Record<string, unknown>
-  const expectedRole = MESSAGE_ROLE_BY_TYPE[type]
-  if (messageRecord['role'] !== expectedRole) {
-    throw new Error(`${subject} message must have role "${expectedRole}"`)
-  }
-  const source = messageRecord['source']
-  if (typeof source !== 'object' || source === null
-    || typeof (source as Record<string, unknown>)['kind'] !== 'string'
-    || (source as Record<string, unknown>)['kind'] === '') {
-    throw new Error(`${subject} message has invalid source`)
-  }
-  if (!Array.isArray(messageRecord['content'])) {
-    throw new Error(`${subject} message has invalid content`)
-  }
-  const sourceRecord = source as Record<string, unknown>
-  if (type === 'system/message') {
-    if (sourceRecord['kind'] !== 'system-prompt') {
-      throw new Error(`${subject} message must have system-prompt source`)
-    }
-    return
-  }
-  if (type === 'assistant/message') {
-    if (sourceRecord['kind'] !== 'model' || !hasProviderModel(sourceRecord)) {
-      throw new Error(`${subject} message must have model source`)
-    }
-    return
-  }
-  if (type !== 'tool/result') return
-  if (sourceRecord['kind'] !== 'tool'
-    || typeof sourceRecord['callId'] !== 'string'
-    || sourceRecord['callId'] === '') {
-    throw new Error(`${subject} message must have tool source`)
-  }
-  if (messageRecord['toolCallId'] !== sourceRecord['callId']) {
-    throw new Error(`${subject} message has mismatched tool call ids`)
-  }
-}
 
 /** Whether an unknown value carries the current provider/model pair. */
 function hasProviderModel(value: unknown): boolean {

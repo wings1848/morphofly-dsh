@@ -9,7 +9,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ISession, SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import {
-  SlotTestRuntime, stubConfigForm, usePinnedBrowserLanguages,
+  SlotTestRuntime, stubConfigForm, syncedConfig, usePinnedBrowserLanguages,
 } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionBehaviorOverrides } from '@deepseek-ai/dsh-client-test-runtime'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
@@ -108,7 +108,7 @@ async function bench(initialSettings?: ChatSettings, withBrowserRegistry = true,
     'main': { kind: 'keyed', scope: 'root' },
     'settings.general.item': { kind: 'list', scope: 'root' },
   }, (_props: { renderSlot?: unknown }) => null)
-  await runtime.mount({ inject: [...injectConversation], apply: applyConversation })
+  await runtime.mount({ inject: [...injectConversation], apply: applyConversation }, syncedConfig({ busyEnter: 'queue', maxConcurrentFileUploads: 2 }))
   const registerGroups = withProcessGroups ? undefined
     : vi.spyOn(runtime.ctx.uiConversation.groups, 'register').mockImplementation(() => () => {})
   const chat = await runtime.mount({ inject: [...injectChat], apply: applyChat })
