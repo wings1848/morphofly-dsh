@@ -1,5 +1,5 @@
 import type { AssistantNodeInjected } from '../src/client/chat/AssistantNodeView.tsx'
-import { MessageId } from '@deepseek-ai/dsh-llm/brand'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import { apply as applyMenus, inject as injectMenus } from '@deepseek-ai/dsh-client-ui-context-menu/client'
 // @vitest-environment jsdom
 /** Chat inject factories exercised over independently mounted Conversation and Chat plugins. */

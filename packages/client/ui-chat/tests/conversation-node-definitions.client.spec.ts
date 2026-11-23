@@ -13,7 +13,7 @@ import {
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { inspectSystemPrompt } from '../../ui-conversation/src/client/contract/system-prompt.ts'
 import { AssistantStreamAccumulator, assistantStreamFirstTokenTime } from '@deepseek-ai/dsh-llm/assistant-stream'
-import { LlmAttemptId, ToolCallId } from '@deepseek-ai/dsh-llm/brand'
+import { LlmAttemptId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { hasAssistantReplyContent } from '../src/client/contract/assistant-content.ts'
 import { assistantDefinition } from '../src/client/conversation-nodes/assistant.ts'
