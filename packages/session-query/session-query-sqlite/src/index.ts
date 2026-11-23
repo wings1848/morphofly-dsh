@@ -27,6 +27,7 @@ import SessionQueryEngine, {
   assertSessionHeadersCompatible,
   buildSessionEventSearchDocuments,
   readColdSessionLog,
+  type ColdSessionLog,
 } from '@deepseek-ai/dsh-session-query'
 import type {
   Config as SessionQueryConfig,
@@ -152,6 +153,8 @@ interface ObservedSession {
 interface ObservedPersistedSession {
   header: SessionHeader
   revision: SessionPersistenceRevision
+  /** Stored artifact size that prices the cold read, when the backend reports one. */
+  sizeBytes?: number
   loaded?: ObservedSession
 }
 
@@ -538,7 +541,13 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
             // live-preferred.
             if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
             assertNotAborted(signal)
-            const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
+            const release = this.coldOpenBudget.reserve(entry.header.id, entry.sizeBytes)
+            let loaded: ColdSessionLog
+            try {
+              loaded = await readColdSessionLog(persistence, entry.header.id, signal)
+            } finally {
+              release()
+            }
             assertNotAborted(signal)
             assertSessionHeadersCompatible(entry.header, loaded.header)
             entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
@@ -922,7 +931,11 @@ function materializePersistenceSnapshots(
     if (result.has(header.id)) {
       throw new Error(`persistence listed duplicate session "${header.id}"`)
     }
-    result.set(header.id, { header, revision: snapshot.revision })
+    result.set(header.id, {
+      header,
+      revision: snapshot.revision,
+      ...(snapshot.sizeBytes === undefined ? {} : { sizeBytes: snapshot.sizeBytes }),
+    })
   }
   return result
 }

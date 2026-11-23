@@ -7,6 +7,7 @@ import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persis
 import type { SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
+import type { ColdOpenBudget } from './cold-open-budget.ts'
 import { assertSessionHeadersCompatible } from './sources.ts'
 
 /** Detached source selected for one exact read. */
@@ -40,6 +41,7 @@ export class SessionCorpus {
   constructor(
     private readonly _ctx: Context,
     private readonly _persistedReadConcurrency: number,
+    private readonly _coldOpenBudget: ColdOpenBudget,
   ) {
     this._optionalPersistenceFiber = _ctx.inject(['sessionPersistence'], (childCtx: Context) => {
       const service = childCtx.sessionPersistence
@@ -108,7 +110,7 @@ export class SessionCorpus {
     const listed = (await listPersisted(persistence, signal)).find(snapshot => snapshot.header.id === sessionId)
     signal?.throwIfAborted()
     if (listed === undefined) throw notFound(sessionId)
-    const loaded = await inspectPersisted(persistence, sessionId, signal)
+    const loaded = await inspectPersisted(persistence, sessionId, signal, this._coldOpenBudget, listed.sizeBytes)
     signal?.throwIfAborted()
     const attached = this._ctx.sessions.get(sessionId)
     if (attached !== undefined) {
@@ -174,7 +176,7 @@ export class SessionCorpus {
       }
       return orderedResults(ids, resolved)
     }
-    const persistedById = new Map(persisted.map(({ header }) => [header.id, header]))
+    const persistedById = new Map(persisted.map(snapshot => [snapshot.header.id, snapshot]))
     const resolvePersisted = async (sessionId: SessionId): Promise<void> => {
       const listed = persistedById.get(sessionId)
       if (listed === undefined) {
@@ -186,14 +188,14 @@ export class SessionCorpus {
       }
       try {
         signal?.throwIfAborted()
-        const loaded = await inspectPersisted(persistence, sessionId, signal)
+        const loaded = await inspectPersisted(persistence, sessionId, signal, this._coldOpenBudget, listed.sizeBytes)
         signal?.throwIfAborted()
         const attached = this._ctx.sessions.get(sessionId)
         if (attached !== undefined) {
           resolved.set(sessionId, projectSource(sessionId, sourceLive(attached), project, signal))
           return
         }
-        assertSessionHeadersCompatible(loaded.header, listed)
+        assertSessionHeadersCompatible(loaded.header, listed.header)
         resolved.set(sessionId, projectSource(sessionId, {
           header: loaded.header,
           events: loaded.events,
@@ -280,12 +282,22 @@ async function listPersisted(
 async function inspectPersisted(
   persistence: SessionPersistence,
   sessionId: SessionId,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  budget: ColdOpenBudget,
+  sizeBytes: number | undefined,
 ): Promise<ColdSessionLog> {
   try {
-    return await readColdSessionLog(persistence, sessionId, signal)
+    const release = budget.reserve(sessionId, sizeBytes)
+    try {
+      return await readColdSessionLog(persistence, sessionId, signal)
+    } finally {
+      release()
+    }
   } catch (error: unknown) {
     if (signal?.aborted) signal.throwIfAborted()
+    // A cold-open refusal is already the query taxonomy; the persistence
+    // wrapper below must not relabel it (the guard would become unreachable).
+    if (error instanceof SessionQueryError) throw error
     if (error instanceof Error && error.name === 'SessionPersistenceCorruptionError') {
       throw new SessionQueryError(
         `stored session "${sessionId}" is corrupt: ${errorMessage(error)}`,
