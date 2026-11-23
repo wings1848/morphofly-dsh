@@ -56,7 +56,7 @@ function settledReply(text: string): SessionEventLikeEntry[] {
   return [
     ...turnStart,
     { type: 'event', event: { type: 'assistant/message', seq: SessionSeq(3), time: 3, surfaceOp: 'append', data: {
-      turn: 1, step: 1, stream: [], message: {
+      turn: 1, step: 1, message: {
         id: brandString<MessageId>('reply'), role: 'assistant', content: [{ type: 'text', text }],
         source: { kind: 'model', provider: 'fixture', model: 'fixture' },
       },

@@ -44,7 +44,7 @@ export function cardAnswer(args: object = proposal, action = ACTION): string {
  */
 export function logProposal(ctx: Context, agent: Agent, id = 'card-plugin-1', args: object = proposal, action = ACTION): ActionCardId {
   const turn = Math.max(1, ctx.agents.turnBoundaryOf(agent.session).lastTurn)
-  agent.session.append('assistant/message', { turn, step: 1, stream: [], message: { id: brandString<MessageId>(id), role: 'assistant',
+  agent.session.append('assistant/message', { turn, step: 1, message: { id: brandString<MessageId>(id), role: 'assistant',
     content: [{ type: 'text', text: cardAnswer(args, action) }], source: { kind: 'model', provider: 'test', model: 'test' } } }, { surfaceOp: 'append' })
   return brandString<ActionCardId>(id)
 }

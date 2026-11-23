@@ -1,16 +1,12 @@
 /** Explicit fork source sharing, JSONL copying, and creation ownership. @module */
 import { Context } from '@deepseek-ai/cordis'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { SessionId, SessionSeq, SessionLogOffset, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import * as plugin from '../src/index.ts'
-import * as sqlitePersistence from '@deepseek-ai/dsh-session-persistence-sqlite'
-import { eventLines, generationLogPath, toHeaderLine } from '../src/format.ts'
 import { JsonlSessionHandle, type JsonlHandleStorage } from '../src/storage.ts'
 
 const parentId = SessionId('parent'), childId = SessionId('child')
@@ -19,18 +15,18 @@ const first: SessionEvent<'turn/start'> = { type: 'turn/start', seq: SessionSeq(
 const marker: SessionEvent<'session/end-seed'> = { type: 'session/end-seed', seq: SessionSeq(1), time: 0, data: { inherited: true } }
 const options = { inheritedEventCount: SessionLogOffset(1), parentSource: { sessionId: parentId,
   endSeq: SessionLogOffset(1), events: [first, marker] } }
-async function fixture(storage: 'sqlite' | 'jsonl' = 'sqlite') {
+async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-fork-event-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
   const ctx = new Context()
   onTestFinished(() => ctx.fiber.dispose())
-  await ctx.plugin(storage === 'sqlite' ? sqlitePersistence : plugin, { root, compression: 'none' })
+  await ctx.plugin(plugin, { root, compression: 'none' })
   const writer = await ctx.sessionPersistence.create(header(parentId)); await writer.append([first]); await writer.close()
   return { ctx, root, storage: ctx.sessionPersistence }
 }
 
 async function closingParent() {
-  const { storage } = await fixture('jsonl')
+  const { storage } = await fixture()
   const id = SessionId('closing-parent')
   const writer = await storage.create(header(id)) as JsonlSessionHandle
   const backend = storage as typeof storage & JsonlHandleStorage
@@ -105,7 +101,7 @@ it('copies a JSONL fork from the supplied history without waiting for the closin
 })
 
 it('leaves no JSONL child when creation is cancelled before its first write', async () => {
-  const { storage } = await fixture('jsonl')
+  const { storage } = await fixture()
   const abort = new AbortController()
   const reason = new Error('fork cancelled')
   abort.abort(reason)
@@ -115,8 +111,8 @@ it('leaves no JSONL child when creation is cancelled before its first write', as
   await child.close()
 })
 
-it.each(['sqlite', 'jsonl'] as const)('refuses competing child creation and retains the committed fork after close (%s)', async (backend) => {
-  const { storage } = await fixture(backend)
+it('refuses competing child creation and retains the committed fork after close', async () => {
+  const { storage } = await fixture()
   const attempts = await Promise.allSettled([
     storage.create(header(childId, true), options), storage.create(header(childId, true), options),
   ])
@@ -130,26 +126,9 @@ it.each(['sqlite', 'jsonl'] as const)('refuses competing child creation and reta
   try { expect((await reader.read()).events).toEqual([first, marker]) } finally { await reader.close() }
 })
 
-it('shares an imported JSONL parent through its SQLite root segment', async () => {
-  const { root, storage } = await fixture()
-  const id = SessionId('legacy')
-  const parentHeader = header(id)
-  const path = generationLogPath(root, undefined, id, SESSION_FORMAT_VERSION, 'none')
-  await mkdir(join(path, '..'), { recursive: true })
-  await writeFile(path, JSON.stringify(toHeaderLine(parentHeader)) + '\n' + eventLines([first]) + '\n')
-  const parent = await storage.open(id, 'read')
-  await parent.close()
-  const child = await storage.create(header(childId, true), { ...options, parentSource: { ...options.parentSource, sessionId: id } })
-  await child.close()
-  expect((await storage.stat(childId))?.eventCount).toBe(2)
-  const db = new DatabaseSync(join(root, '.segments/sessions.sqlite'))
-  try {
-    expect(db.prepare('SELECT base_seq FROM segments WHERE segment_uuid = (SELECT tail_segment_uuid FROM traces WHERE trace_uuid = ?)').get(childId)).toEqual({ base_seq: 1 })
-  } finally { db.close() }
-})
 
-it.each(['sqlite', 'jsonl'] as const)('forks an empty parent after its durability checkpoint (%s)', async (backend) => {
-  const { storage } = await fixture(backend)
+it('forks an empty parent after its durability checkpoint', async () => {
+  const { storage } = await fixture()
   const pendingId = SessionId('pending')
   const parent = await storage.create(header(pendingId))
   await parent.flush(); await parent.close()
@@ -163,8 +142,8 @@ it.each(['sqlite', 'jsonl'] as const)('forks an empty parent after its durabilit
   await reader.close()
 })
 
-it.each(['sqlite', 'jsonl'] as const)('materializes an empty child from a zero-length parent prefix (%s)', async (backend) => {
-  const { storage } = await fixture(backend)
+it('materializes an empty child from a zero-length parent prefix', async () => {
+  const { storage } = await fixture()
   const child = await storage.create(header(childId), {
     parentSource: { sessionId: parentId, endSeq: SessionLogOffset(0), events: [] },
   })
@@ -173,22 +152,9 @@ it.each(['sqlite', 'jsonl'] as const)('materializes an empty child from a zero-l
   try { expect((await reader.read()).events).toEqual([]) } finally { await reader.close() }
 })
 
-it('refuses an absent parent even for an empty prefix and releases child ownership (sqlite)', async () => {
-  const { storage } = await fixture('sqlite')
-  await expect(storage.create(header(childId, true), {
-    inheritedEventCount: SessionLogOffset(0), parentSource: {
-      sessionId: SessionId('absent'), endSeq: SessionLogOffset(0), events: [{ ...marker, seq: SessionSeq(0) }],
-    },
-  })).rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
-  expect(await storage.stat(childId)).toBeUndefined()
-  const child = await storage.create(header(childId, true), options)
-  await child.close()
-  const reader = await storage.open(childId, 'read')
-  try { expect((await reader.read()).events).toEqual([first, marker]) } finally { await reader.close() }
-})
 
 it('copies a JSONL fork without consulting the parent artifact', async () => {
-  const { storage } = await fixture('jsonl')
+  const { storage } = await fixture()
   const completed: SessionEvent<'turn/end'> = {
     type: 'turn/end', seq: SessionSeq(1), time: 0, data: { turn: 1, reason: { kind: 'completed' } },
   }
@@ -210,7 +176,7 @@ it('copies a JSONL fork without consulting the parent artifact', async () => {
 })
 
 it('releases JSONL child ownership when initial materialization fails', async () => {
-  const { storage } = await fixture('jsonl')
+  const { storage } = await fixture()
   const failure = new Error('initial JSONL write failed')
   const persist = vi.spyOn(JsonlSessionHandle.prototype, 'append').mockRejectedValueOnce(failure)
   onTestFinished(() => { persist.mockRestore() })
@@ -223,7 +189,7 @@ it('releases JSONL child ownership when initial materialization fails', async ()
 })
 
 it('retains both JSONL creation and handle-close failures', async () => {
-  const { storage } = await fixture('jsonl')
+  const { storage } = await fixture()
   const failure = new Error('initial JSONL write failed')
   const closeFailure = new Error('write lock release failed')
   const persist = vi.spyOn(JsonlSessionHandle.prototype, 'append').mockRejectedValueOnce(failure)

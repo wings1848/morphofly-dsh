@@ -93,7 +93,7 @@ export async function fixture(initial?: PageCardState) {
   const propose = async (id = 'card-creation-1', args: object = proposal, caller = agent) => {
     const turn = Math.max(1, ctx.agents.turnBoundaryOf(caller.session).lastTurn)
     const text = `I can build it.\n\n\`\`\`action-card\n${JSON.stringify({ action: ACTION, ...args })}\n\`\`\`\n`
-    caller.session.append('assistant/message', { turn, step: ++step, stream: [], message: { id: brandString<MessageId>(id), role: 'assistant',
+    caller.session.append('assistant/message', { turn, step: ++step, message: { id: brandString<MessageId>(id), role: 'assistant',
       content: [{ type: 'text', text }], source: { kind: 'model', provider: 'test', model: 'test' } } }, { surfaceOp: 'append' })
     await Promise.resolve()
     return brandString<ActionCardId>(id)

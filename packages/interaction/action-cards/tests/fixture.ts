@@ -54,7 +54,7 @@ export async function fixture(kind: Partial<ActionCardKind<TestDetails>> = {}) {
   /** Log an answer that ends with a card block, as the loop does after the model responds. */
   const offer = (fields: object = proposal, caller = agent, turn = 1): ActionCardId => {
     const message = createAssistantMessage({ content: [{ type: 'text', text: cardAnswer(fields) }], source: { provider: 'test', model: 'test' } })
-    caller.session.append('assistant/message', { turn, step: ++step, stream: [], message }, { surfaceOp: 'append' })
+    caller.session.append('assistant/message', { turn, step: ++step, message }, { surfaceOp: 'append' })
     return brandString<ActionCardId>(message.id)
   }
   const view = (caller = agent) => ctx.actionCards.view(caller.session)

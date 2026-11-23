@@ -42,7 +42,7 @@ export function syntheticHistory(): string {
     const callId = brandString<ToolCallId>(`synthetic-call-${String(turn)}`)
     const args = '{"path":"src/a.ts"}'
     session.append('assistant/message', {
-      turn, step: 1, stream: [],
+      turn, step: 1,
       message: createAssistantMessage({
         source: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
         content: [

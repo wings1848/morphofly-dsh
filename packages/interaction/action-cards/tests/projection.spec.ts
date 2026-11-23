@@ -38,7 +38,7 @@ function answer(content: readonly ContentBlock[] | string, turnNumber = 1, inter
   const message = createAssistantMessage({ content: typeof content === 'string' ? [{ type: 'text', text: content }] : content,
     source: { provider: 'test', model: 'test' } })
   return { type: 'assistant/message', seq: SessionSeq(seq++), time: 0, surfaceOp: 'append',
-    data: { turn: turnNumber, step: 1, stream: [], message, ...interrupted ? { interrupted: true } : {} } }
+    data: { turn: turnNumber, step: 1, message, ...interrupted ? { interrupted: true } : {} } }
 }
 
 function idOf(event: SessionEvent<'assistant/message'>): ActionCardId {
