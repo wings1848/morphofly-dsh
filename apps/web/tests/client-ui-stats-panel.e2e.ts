@@ -7,11 +7,11 @@ import { readFileSync } from 'node:fs'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
-import { parseEntryYaml } from '@deepseek-ai/cordis-plugin-include'
-import { brandString } from '@deepseek-ai/dsh-brand'
+import * as yaml from 'js-yaml'
+import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import {
-  createAssistantMessage, createMessage, createUserMessage, type ToolCallId,
-  type AssistantStreamRecord, type TokenUsage,
+  createAssistantMessage, createMessage, createUserMessage, ToolCallId,
+  type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
@@ -31,7 +31,7 @@ const MODE = webSnapshotMode()
 
 /** Overlay layer entries, for the composition guard below. */
 function profileEntries(path: string): unknown[] {
-  const parsed = parseEntryYaml(readFileSync(path, 'utf8'))
+  const parsed = yaml.load(readFileSync(path, 'utf8'), { schema: entryListSchema })
   if (!Array.isArray(parsed)) throw new Error(`profile layer at ${path} must be a list`)
   return parsed
 }
@@ -42,11 +42,6 @@ const USAGE: TokenUsage = {
   outputTokens: 240,
   cacheReadTokens: 3_600,
   cacheWriteTokens: 400,
-}
-
-/** Compact stream whose first token arrives at the absolute Session time `firstTokenAt`. */
-function stream(firstTokenAt: number): AssistantStreamRecord[] {
-  return [{ type: 'text-chunks', time0: firstTokenAt, index: 0, dt: [200], texts: ['Ready.'] }]
 }
 
 describe('Statistics view overlay', () => {
@@ -83,9 +78,9 @@ describe('web e2e: Statistics view', () => {
     }), { surfaceOp: 'append' })
     agent.session.append('step/start', { turn: 1, step: 1 })
     await new Promise((resolve) => { setTimeout(resolve, 60) })
-    // Real timestamps: the compact stream's time0 is an absolute Session time,
-    // so the measured first token must sit between this step's start and the
-    // settled message, exactly as a live round records them.
+    // Real timestamps: `firstTokenTime` is an absolute Session time, so the
+    // measured first token must sit between this step's start and the settled
+    // message, exactly as a live round records them.
     const firstTokenAt = Date.now() - 10
     agent.session.append('assistant/message', {
       turn: 1,
@@ -94,13 +89,13 @@ describe('web e2e: Statistics view', () => {
         content: [{ type: 'text', text: 'Ready.' }],
         source: { provider: 'fixture', model: 'fixture' },
       }),
-      stream: stream(firstTokenAt),
+      firstTokenTime: firstTokenAt,
       usage: USAGE,
     }, { surfaceOp: 'append' })
     agent.session.append('tool/call', {
       turn: 1,
       step: 1,
-      callId: brandString<ToolCallId>('call-1'),
+      callId: ToolCallId('call-1'),
       name: 'read',
       arguments: JSON.stringify({ file_path: '/work/notes.md' }),
     })
@@ -110,8 +105,8 @@ describe('web e2e: Statistics view', () => {
       message: createMessage({
         role: 'tool',
         content: [{ type: 'text', text: 'one\ntwo' }],
-        source: { kind: 'tool', callId: brandString<ToolCallId>('call-1') },
-        toolCallId: brandString<ToolCallId>('call-1'),
+        source: { kind: 'tool', callId: ToolCallId('call-1') },
+        toolCallId: ToolCallId('call-1'),
       }),
     }, { surfaceOp: 'append' })
     agent.session.append('step/end', { turn: 1, step: 1 })

@@ -213,7 +213,7 @@ class LogBuilder {
         this.add({ type: 'step/start', data: { turn, step } })
       }
       this.time += elapsedMs
-      this.add({ type: 'assistant/message', data: { turn, step, message: assistantMessage(this.id(), [...content, ...calls.map(call => call.block)]), stream: [] }, surfaceOp: 'append' })
+      this.add({ type: 'assistant/message', data: { turn, step, message: assistantMessage(this.id(), [...content, ...calls.map(call => call.block)]) }, surfaceOp: 'append' })
       const callSeqs = calls.map(({ block }) => this.add({
         type: 'tool/call', data: { turn, step, callId: block.id, name: block.name, arguments: block.arguments },
       }))

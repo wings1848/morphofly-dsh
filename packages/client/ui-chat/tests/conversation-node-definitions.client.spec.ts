@@ -12,9 +12,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { inspectSystemPrompt } from '../../ui-conversation/src/client/contract/system-prompt.ts'
-import { AssistantStreamAccumulator } from '@deepseek-ai/dsh-llm/assistant-stream'
-import { brandString } from '@deepseek-ai/dsh-brand'
-import type { LlmAttemptId, ToolCallId } from '@deepseek-ai/dsh-llm/types'
+import { AssistantStreamAccumulator, assistantStreamFirstTokenTime } from '@deepseek-ai/dsh-llm/assistant-stream'
+import { LlmAttemptId, ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { hasAssistantReplyContent } from '../src/client/contract/assistant-content.ts'
 import { assistantDefinition } from '../src/client/conversation-nodes/assistant.ts'
@@ -23,7 +22,6 @@ import { commandDefinition } from '../src/client/conversation-nodes/command.ts'
 import { compactionDefinition } from '../src/client/conversation-nodes/compaction.ts'
 import { unknownFallbackDefinition } from '../src/client/conversation-nodes/fallback.ts'
 import { nextStepInboxDefinition, nextTurnInboxDefinition } from '../src/client/conversation-nodes/inbox.ts'
-import { inheritedHistoryDefinition } from '../src/client/conversation-nodes/inherited-history.ts'
 import { developerMessageDefinition, messageDefinition } from '../src/client/conversation-nodes/message.ts'
 import { inspectRequestPrompt } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { requestPromptDefinition, systemMessageDefinition } from '../src/client/conversation-nodes/request-prompt.ts'
@@ -50,7 +48,6 @@ const DEFINITIONS: readonly ConversationNodeDefinition[] = [
   toolDefinition,
   commandDefinition,
   compactionDefinition,
-  inheritedHistoryDefinition,
   retryDefinition,
   turnErrorDefinition,
   turnMaxTokensDefinition,
@@ -79,18 +76,15 @@ function at(
   data: unknown,
   extra: Record<string, unknown> = {},
 ): SessionLiveEventEntry {
-  const payload = type === 'assistant/message' && typeof data === 'object' && data !== null
-    ? { ...(data as Record<string, unknown>), stream: (data as { stream?: unknown }).stream ?? [] }
-    : data
   return {
     type: 'event',
     event: {
       seq,
       time: 1_700_000_000_000 + seq,
       type,
-      data: payload,
+      data,
       ...extra,
-    } as unknown as SessionEvent,
+    } as SessionEvent,
   }
 }
 
@@ -104,10 +98,11 @@ function packedInputs(entries: readonly SessionLiveEventEntry[]): SessionEventLi
   } | undefined
   const flush = (): void => {
     if (active === undefined) return
+    const firstTokenTime = assistantStreamFirstTokenTime(active.stream.snapshot())
     output.push(at(active.last.event.seq, 'assistant/attempt', {
       turn: active.turn,
       step: active.step,
-      stream: active.stream.snapshot(),
+      ...firstTokenTime === undefined ? {} : { firstTokenTime },
     }, { time: active.last.event.time }))
     active = undefined
   }
@@ -138,11 +133,12 @@ function packedInputs(entries: readonly SessionLiveEventEntry[]): SessionEventLi
       && current !== undefined
       && current.turn === event.data.turn
       && current.step === event.data.step) {
+      const firstTokenTime = assistantStreamFirstTokenTime(current.stream.snapshot())
       output.push({
         ...entry,
         event: {
           ...entry.event,
-          data: { ...entry.event.data, stream: current.stream.snapshot() },
+          data: { ...entry.event.data, ...firstTokenTime === undefined ? {} : { firstTokenTime } },
         } as SessionEvent,
       })
       active = undefined
@@ -177,7 +173,7 @@ function appendAssistantChunk(value: ConversationNodeAssembler, seq: number, chu
     type: 'transient',
     event: {
       type: 'assistant/live-chunk', seq, time: 1_700_000_000_000 + seq,
-      data: { attemptId: brandString<LlmAttemptId>('assistant-visibility'), turn: 1, step: 1, chunk },
+      data: { attemptId: LlmAttemptId('assistant-visibility'), turn: 1, step: 1, chunk },
     },
   })
   value.flush()
@@ -1232,7 +1228,7 @@ describe('built-in conversation node Definitions', () => {
     appendAssistantChunk(value, 10, { type: 'block-start', index: 0, blockType: 'image' })
     expect(node(snapshot(value), 'assistant-step')?.visibility).toBe('visible')
     appendAssistantChunk(value, 11, {
-      type: 'tool-call-delta', index: 0, id: brandString<ToolCallId>('visibility-tool'), name: 'read', argumentsDelta: '',
+      type: 'tool-call-delta', index: 0, id: ToolCallId('visibility-tool'), name: 'read', argumentsDelta: '',
     })
     expect(node(snapshot(value), 'assistant-step')?.visibility).toBe('hidden')
     appendAssistantChunk(value, 12, { type: 'block-start', index: 0, blockType: 'image' })
@@ -1433,10 +1429,8 @@ describe('built-in conversation node Definitions', () => {
     { outcome: 'abandoned', startLoaded: true },
     { outcome: 'abandoned', startLoaded: false },
   ])('retains the Assistant key after $outcome retirement (startLoaded=$startLoaded)', ({ outcome, startLoaded }) => {
-    const attemptId = brandString<LlmAttemptId>('retired-chat-attempt')
+    const attemptId = LlmAttemptId('retired-chat-attempt')
     const chunk = { type: 'text-delta' as const, index: 0, text: 'Discarded reply' }
-    const stream = new AssistantStreamAccumulator()
-    stream.push({ time: 1_030, chunk })
     const value = assembler([
       at(1, 'turn/start', { turn: 1 }),
       ...startLoaded ? [at(2, 'step/start', { turn: 1, step: 1 })] : [],
@@ -1455,7 +1449,7 @@ describe('built-in conversation node Definitions', () => {
     expect(visible?.visibility).toBe('visible')
 
     if (outcome === 'attempt') {
-      const event = at(3, 'assistant/attempt', { turn: 1, step: 1, stream: stream.snapshot() }).event
+      const event = at(3, 'assistant/attempt', { turn: 1, step: 1, firstTokenTime: 1_030 }).event
       if (event.type !== 'assistant/attempt') throw new Error('expected Assistant attempt')
       value.settleAssistant(attemptId, { type: 'event', event })
     } else value.settleAssistant(attemptId)
@@ -1482,7 +1476,7 @@ describe('built-in conversation node Definitions', () => {
       event: {
         type: 'assistant/live-chunk', seq: 4.5, time: 1_050,
         data: {
-          attemptId: brandString<LlmAttemptId>('replacement-chat-attempt'), turn: 1, step: 1,
+          attemptId: LlmAttemptId('replacement-chat-attempt'), turn: 1, step: 1,
           chunk: { type: 'text-delta', index: 0, text: 'Replacement reply' },
         },
       },
@@ -1495,7 +1489,7 @@ describe('built-in conversation node Definitions', () => {
   })
 
   it('omits first-token metrics after live settlement and after reopening the same history', () => {
-    const attemptId = brandString<LlmAttemptId>('settled-chat-timing')
+    const attemptId = LlmAttemptId('settled-chat-timing')
     const starts = [
       at(1, 'turn/start', { turn: 1 }, { time: 1_000 }),
       at(2, 'step/start', { turn: 1, step: 1 }, { time: 1_010 }),
@@ -1514,11 +1508,8 @@ describe('built-in conversation node Definitions', () => {
       status: 'running', time: 1_030, blocks: [{ kind: 'text', text: 'Answer' }],
     })
 
-    const stream = new AssistantStreamAccumulator()
-    stream.push({ time: 1_030, chunk })
     const event = at(3, 'assistant/message', {
-      turn: 1, step: 1, message: assistantMessage('settled-timing', 'Answer'),
-      stream: stream.snapshot(), usage: { outputTokens: 10 },
+      turn: 1, step: 1, message: assistantMessage('settled-timing', 'Answer'), usage: { outputTokens: 10 },
     }, { surfaceOp: 'append', time: 1_050 }).event
     if (event.type !== 'assistant/message') throw new Error('expected Assistant settlement')
     const settlement = { type: 'event' as const, event }
@@ -1542,7 +1533,7 @@ describe('built-in conversation node Definitions', () => {
     }
   })
 
-  it('uses live Assistant deltas without replaying settled embedded streams', () => {
+  it('uses live Assistant deltas without replaying settled sidecar streams', () => {
     const runningHistory = [
       at(1, 'turn/start', { turn: 1 }),
       at(2, 'step/start', { turn: 1, step: 1 }),
@@ -1586,7 +1577,7 @@ describe('built-in conversation node Definitions', () => {
     const runningAttempt = packedHistory.at(-1)?.event
     expect(runningAttempt?.type).toBe('assistant/attempt')
     if (runningAttempt?.type !== 'assistant/attempt') throw new Error('expected packed running attempt')
-    expect(runningAttempt.data.stream.length).toBeGreaterThan(0)
+    expect(runningAttempt.data.firstTokenTime).toBe(1_000)
     const packed = assembler(packedHistory)
 
     const running = node(snapshot(scalar), 'assistant-step')
@@ -1652,7 +1643,7 @@ describe('built-in conversation node Definitions', () => {
     expect(finalizedInputs.filter(input => input.event.type === 'assistant/attempt')).toHaveLength(1)
     const finalizedMessage = finalizedInputs.find(input => input.event.type === 'assistant/message')?.event
     if (finalizedMessage?.type !== 'assistant/message') throw new Error('expected packed final message')
-    expect(finalizedMessage.data.stream.length).toBeGreaterThan(0)
+    expect(finalizedMessage.data.firstTokenTime).toBe(1_700_000_000_027)
     const finalizedPacked = snapshot(assembler(finalizedInputs))
     const finalNode = (node(finalizedPacked, 'assistant-step')?.data as AssistantChatData).finalNode
     expect(finalNode).toMatchObject({
@@ -1679,7 +1670,7 @@ describe('built-in conversation node Definitions', () => {
     const namedToolInputs = packedInputs(namedToolHistory)
     const namedToolMessage = namedToolInputs.find(input => input.event.type === 'assistant/message')?.event
     if (namedToolMessage?.type !== 'assistant/message') throw new Error('expected packed named-tool message')
-    expect(namedToolMessage.data.stream.length).toBeGreaterThan(0)
+    expect(namedToolMessage.data.firstTokenTime).toBe(4_000)
     const namedToolPacked = snapshot(assembler(namedToolInputs))
     const namedTool = (node(namedToolPacked, 'assistant-step')?.data as AssistantChatData).finalNode
     expect(namedTool).toMatchObject({
@@ -2289,7 +2280,7 @@ describe('built-in conversation node Definitions', () => {
     value.prepend([systemAt(1, 'A'), systemAt(3, 'B'), systemAt(5, 'A2', 1)], false)
     value.flush()
     expect(snapshot(value).nodes.values().filter(candidate => candidate.kind === 'system-prompt')
-      .map(candidate => candidate.data)).toEqual([{ text: 'A' }, { text: 'B', update: true }, { text: 'D\n\nC' }])
+      .map(candidate => candidate.data)).toEqual([{ text: 'A' }, { text: 'B', update: true }, { text: 'C' }])
   })
 
   it('hides a published prompt node while a prepended replacement makes its prompt unknown', () => {
@@ -2369,7 +2360,7 @@ describe('built-in conversation node Definitions', () => {
     expect(cards()).toEqual([
       [1, { text: '# System' }],
       [10, { text: '# Updated', update: true }],
-      [14, { text: '# System\n\n# Updated' }],
+      [14, { text: '# Updated' }],
     ])
   })
 
@@ -2815,108 +2806,13 @@ describe('built-in conversation node Definitions', () => {
     ])
 
     const manual = node(snapshot(compactions), 'manual-compaction')
-    expect((manual?.data as ManualCompactionChatData).compaction).toEqual({
-      kind: 'compaction', seq: 13, time: 1_700_000_000_000 + 13, summaryEventSeq: 12, shadowedItemCount: 2, shadowedTokenCount: 100,
+    expect((manual?.data as ManualCompactionChatData).compaction).toMatchObject({
+      summary: 'manual summary',
+      summaryEventSeq: 12,
     })
     const automatic = node(snapshot(compactions), 'compaction')
-    expect(automatic?.data).toEqual({
-      kind: 'compaction', seq: 22, time: 1_700_000_000_000 + 22, summaryEventSeq: 21, shadowedItemCount: 2, shadowedTokenCount: 200,
-    })
+    expect(automatic?.data).toMatchObject({ summary: 'automatic summary', summaryEventSeq: 21 })
     expect(snapshot(compactions).nodes.values().filter(candidate => candidate.kind === 'compaction')).toHaveLength(1)
-  })
-
-  it('keeps one automatic compaction row from start through the committed summary', () => {
-    const value = assembler([
-      at(1, 'turn/start', { turn: 1 }),
-      at(2, 'compaction/start', { compactionId: 'automatic-live', turn: 1 }),
-    ])
-    const running = node(snapshot(value), 'compaction')
-    expect(running?.data).toEqual({ kind: 'compaction-progress', status: 'running' })
-    value.append(at(3, 'compaction/summary', {
-      compactionId: 'automatic-live', summary: [{ type: 'text', text: 'retained context' }],
-      shadowedSeqs: [0], shadowedTokenCount: 42,
-    }))
-    value.flush()
-    expect(node(snapshot(value), 'compaction')?.data).toEqual(running?.data)
-    value.append(at(4, 'user/message', {
-      ...textMessage('automatic-checkpoint', 'retained context'),
-      source: { kind: 'compact-checkpoint', compactionId: 'automatic-live' },
-    }, { surfaceOp: { op: 'replace', startSeq: 0, endSeq: 0 } }))
-    value.append(at(5, 'compaction/end', { compactionId: 'automatic-live', turn: 1 }))
-    value.flush()
-    const completed = node(snapshot(value), 'compaction')
-    expect(completed?.key).toBe(running?.key)
-    expect(completed?.data).toMatchObject({ kind: 'compaction', summaryEventSeq: 3, shadowedTokenCount: 42 })
-    expect(snapshot(value).nodes.values().filter(candidate => candidate.kind === 'compaction')).toHaveLength(1)
-  })
-
-  it.each([undefined, 'Summarizer failed', 'Cancelled'])('settles automatic compaction without a checkpoint: %s', (error) => {
-    const start = at(2, 'compaction/start', { compactionId: 'automatic-ended', turn: 1 })
-    const end = at(3, 'compaction/end', { compactionId: 'automatic-ended', turn: 1, ...error === undefined ? {} : { error } })
-    const value = assembler([at(1, 'turn/start', { turn: 1 }), start])
-    value.append(end)
-    value.flush()
-    const expected = { kind: 'compaction-progress', status: 'ended', ...error === undefined ? {} : { error } }
-    expect(node(snapshot(value), 'compaction')?.data).toEqual(expected)
-    expect(node(snapshot(assembler([end], true)), 'compaction')?.data).toEqual(expected)
-  })
-
-  it('stops an unfinished automatic compaction when its owning turn closes', () => {
-    const value = assembler([
-      at(1, 'turn/start', { turn: 1 }),
-      at(2, 'compaction/start', { compactionId: 'automatic-interrupted', turn: 1 }),
-    ])
-    value.append(at(3, 'turn/end', { turn: 1, reason: { kind: 'interrupted' } }))
-    value.flush()
-    expect(node(snapshot(value), 'compaction')?.data).toEqual({ kind: 'compaction-progress', status: 'interrupted' })
-  })
-
-  it.each(['replace', 'append', 'prepend'] as const)('places one divider at the latest inherited history marker via %s', (mode) => {
-    const entries = [
-      at(0, 'session/end-seed', { inherited: true }),
-      at(1, 'turn/start', { turn: 1 }),
-      at(2, 'user/message', textMessage('parent', 'parent prompt'), { surfaceOp: 'append' }),
-      at(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
-      at(4, 'session/end-seed', { inherited: true }),
-      at(5, 'session/end-seed', {}),
-      at(6, 'turn/start', { turn: 2 }),
-      at(7, 'user/message', textMessage('child', 'child prompt'), { surfaceOp: 'append' }),
-    ]
-    const value = assembler(mode === 'replace' ? entries : mode === 'append' ? entries.slice(0, 4) : entries.slice(4), mode === 'prepend')
-    if (mode === 'append') {
-      for (const entry of entries.slice(4)) value.append(entry)
-    } else if (mode === 'prepend') {
-      value.prepend(entries.slice(0, 4), false)
-    }
-    value.flush()
-    const dividers = [...snapshot(value).nodes.values()].filter(candidate => candidate.kind === 'inherited-history')
-    expect(dividers.map(divider => [divider.anchorSeq, divider.location.kind])).toEqual([[4, 'session']])
-  })
-
-  it.each([false, true])('keeps a mid-turn inherited cut outside the Turn process (paginated: %s)', (paginated) => {
-    const entries = [
-      at(0, 'turn/start', { turn: 1 }),
-      at(1, 'user/message', textMessage('parent', 'parent prompt'), { surfaceOp: 'append' }),
-      at(2, 'step/start', { turn: 1, step: 1 }),
-      at(3, 'session/end-seed', { inherited: true }),
-      at(4, 'turn/end', { turn: 1, reason: { kind: 'forked' } }),
-    ]
-    const value = assembler(paginated ? entries.slice(3) : entries, paginated)
-    if (paginated) {
-      value.prepend(entries.slice(0, 3), false)
-      value.flush()
-    }
-    const divider = node(snapshot(value), 'inherited-history')
-    expect(divider).toMatchObject({ anchorSeq: 3, groupTree: 'turn', location: { kind: 'step' } })
-  })
-
-  it('places no divider in a Session without inherited history', () => {
-    const value = assembler([
-      at(0, 'session/end-seed', {}),
-      at(1, 'turn/start', { turn: 1 }),
-      at(2, 'user/message', textMessage('own', 'own prompt'), { surfaceOp: 'append' }),
-    ])
-    expect(node(snapshot(value), 'inherited-history')).toBeUndefined()
   })
 
   it('fills a landed compaction marker when an older page supplies its summary', () => {
@@ -2927,9 +2823,7 @@ describe('built-in conversation node Definitions', () => {
       }, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 8 } }),
     ], true)
     const before = node(snapshot(value), 'compaction')
-    expect(before?.data).toEqual({
-      kind: 'compaction', seq: 13, time: 1_700_000_000_000 + 13, summaryEventSeq: null, shadowedItemCount: null, shadowedTokenCount: null,
-    })
+    expect(before?.data).toMatchObject({ summary: null, summaryEventSeq: null })
 
     value.prepend([
       at(9, 'compaction/start', { compactionId: 'compact-1', turn: null }),
@@ -2948,9 +2842,10 @@ describe('built-in conversation node Definitions', () => {
 
     const after = node(snapshot(value), 'compaction')
     expect(after?.key).toBe(before?.key)
-    expect(after?.data).toEqual({
-      kind: 'compaction', seq: 13, time: 1_700_000_000_000 + 13,
-      summaryEventSeq: 10, shadowedItemCount: 3,
+    expect(after?.data).toMatchObject({
+      summary: 'older summary',
+      summaryEventSeq: 10,
+      shadowedItemCount: 3,
       shadowedTokenCount: 42,
     })
   })
@@ -2969,9 +2864,10 @@ describe('built-in conversation node Definitions', () => {
       }, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 3 } }),
     ], true)
 
-    expect(node(snapshot(value), 'compaction')?.data).toEqual({
-      kind: 'compaction', seq: 11, time: 1_700_000_000_000 + 11,
-      summaryEventSeq: 10, shadowedItemCount: 3,
+    expect(node(snapshot(value), 'compaction')?.data).toMatchObject({
+      summary: 'loaded summary',
+      summaryEventSeq: 10,
+      shadowedItemCount: 3,
       shadowedTokenCount: 42,
     })
   })
@@ -3213,7 +3109,7 @@ describe('built-in conversation node Definitions', () => {
     const manual = node(snapshot(value), 'manual-compaction')
     expect((manual?.data as ManualCompactionChatData)).toMatchObject({
       command: { commandId: 'command-1', name: 'compact', outcome: { kind: 'success' } },
-      compaction: { seq: 21, summaryEventSeq: 20, shadowedItemCount: 2, shadowedTokenCount: 100 },
+      compaction: { summary: 'manual summary', summaryEventSeq: 20 },
     })
   })
 })

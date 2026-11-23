@@ -1,9 +1,7 @@
 /** Synthetic current-generation history and paced reply for browser measurements. */
-import { brandString } from '@deepseek-ai/dsh-brand'
-import { createAssistantMessage, createSystemMessage, createUserMessage, createToolResultMessage, type ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createSystemMessage, createUserMessage, createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AssistantStreamAccumulator } from '@deepseek-ai/dsh-llm/assistant-stream'
-import { Session, type SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-title'
 
 /** Closed turns in the browser history workload. */
@@ -17,14 +15,14 @@ export const FIRST = 'SYNTHETIC_REPLY_FIRST'
 export const DONE = 'SYNTHETIC_REPLY_DONE'
 /** Paced text chunks per continuation. */
 export const DELTAS = 120
-/** Replay delay per stream chunk, in milliseconds; keeps the input-overlap probe inside the stream on loaded CI runners. */
-export const PACE_MS = 32
+/** Replay delay per stream chunk, in milliseconds. */
+export const PACE_MS = 16
 
 /** Create mixed prose, code, reasoning and tool history without reading user data.
  * @returns Current Session JSONL accepted by the shared Web seeder.
  */
 export function syntheticHistory(): string {
-  const session = Session.create(brandString<SessionId>(SESSION_ID))
+  const session = Session.create(SessionId(SESSION_ID))
   for (let turn = 1; turn <= HISTORY_TURNS; turn++) {
     session.append('turn/start', { turn })
     session.append('step/start', { turn, step: 1 })
@@ -36,7 +34,7 @@ export function syntheticHistory(): string {
       source: { kind: 'user' },
     }), { surfaceOp: 'append' })
     if (turn === 1) session.append('session/title', { title: TITLE, messageSeqs: [user.seq], source: { kind: 'fallback' } })
-    const callId = brandString<ToolCallId>('synthetic-tool-' + String(turn))
+    const callId = ToolCallId('synthetic-tool-' + String(turn))
     const tool = turn % 6 === 0
     const code = turn % 12 === 0
       ? '\n\n```ts\n' + Array.from({ length: 60 }, (_, i) => 'const value' + String(i) + ' = ' + String(i)).join('\n') + '\n```'
@@ -44,27 +42,9 @@ export function syntheticHistory(): string {
     const reasoning = 'Compare the synthetic module and test. '.repeat(40)
     const text = 'Synthetic answer ' + String(turn) + '. ' + 'Preserve ordering and validate the output. '.repeat(30) + code
     const args = '{"path":"src/example.ts"}'
-    const stream = new AssistantStreamAccumulator()
-    let time = 1700000000000 + turn * 10000
-    const push = (chunk: StreamChunk): void => { stream.push({ time: time++, chunk }) }
-    for (const [index, block] of [{ type: 'reasoning' as const, text: reasoning }, { type: 'text' as const, text }].entries()) {
-      push({ type: 'block-start', index, blockType: block.type })
-      for (let offset = 0; offset < block.text.length; offset += 12) {
-        push({ type: block.type === 'reasoning' ? 'reasoning-delta' : 'text-delta', index, text: block.text.slice(offset, offset + 12) })
-      }
-      push({ type: 'block-end', index, block })
-    }
-    if (tool) {
-      push({ type: 'block-start', index: 2, blockType: 'tool-call' })
-      for (let offset = 0; offset < args.length; offset += 8) {
-        push({ type: 'tool-call-delta', index: 2, id: callId, ...offset === 0 ? { name: 'synthetic_tool' } : {}, argumentsDelta: args.slice(offset, offset + 8) })
-      }
-      push({ type: 'block-end', index: 2, block: { type: 'tool-call', id: callId, name: 'synthetic_tool', arguments: args } })
-    }
-    push({ type: 'usage', usage: { inputTokens: 4000, outputTokens: 800 } })
-    push({ type: 'finish', reason: { kind: tool ? 'tool-calls' : 'stop' } })
     session.append('assistant/message', {
-      turn, step: 1, stream: [...stream.snapshot()],
+      // V5 settles with scalars only; the stream lives in the Session sidecar.
+      turn, step: 1, firstTokenTime: 1700000000000 + turn * 10000,
       message: createAssistantMessage({
         source: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
         content: [

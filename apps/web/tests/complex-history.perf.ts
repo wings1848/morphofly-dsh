@@ -9,10 +9,9 @@ import { performance } from 'node:perf_hooks'
 import type { Browser, CDPSession, Locator, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { brandString } from '@deepseek-ai/dsh-brand'
+import type { AssistantStreamRecord, StreamChunk, TimedStreamChunk } from '@deepseek-ai/dsh-llm'
 import {
-  type ToolCallId,
+  ToolCallId,
   createAssistantMessage,
   createSystemMessage,
   createToolResultMessage,
@@ -24,7 +23,7 @@ import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import {
   SESSION_FORMAT_VERSION,
   Session,
-  type SessionId,
+  SessionId,
 } from '@deepseek-ai/dsh-session'
 // Carries the session/title event declaration into the fixture builder.
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -222,7 +221,6 @@ function appendAssistant(
   body: string,
 ): void {
   session.append('assistant/message', {
-    stream: [],
     turn,
     step,
     message: createAssistantMessage({
@@ -244,7 +242,7 @@ function appendToolStep(
   toolCount: number,
 ): void {
   const calls = Array.from({ length: toolCount }, (_, index) => {
-    const callId = brandString<ToolCallId>(`perf-call-${String(turn)}-${String(index)}`)
+    const callId = ToolCallId(`perf-call-${String(turn)}-${String(index)}`)
     const args = JSON.stringify({
       turn,
       index,
@@ -254,7 +252,6 @@ function appendToolStep(
   })
 
   session.append('assistant/message', {
-    stream: [],
     turn,
     step,
     message: createAssistantMessage({
@@ -333,7 +330,7 @@ function fixtureLog(session: Session): string {
 }
 
 function smallSidebarFixture(): string {
-  const session = Session.create(brandString<SessionId>('perf-small-template'))
+  const session = Session.create(SessionId('perf-small-template'))
   session.append('turn/start', {
     turn: 1,
   })
@@ -356,7 +353,7 @@ function smallSidebarFixture(): string {
 }
 
 function longHistoryFixture(): string {
-  const session = Session.create(brandString<SessionId>(LONG_SESSION_ID))
+  const session = Session.create(SessionId(LONG_SESSION_ID))
   for (let turn = 1; turn <= LONG_HISTORY_TURNS; turn += 1) {
     session.append('turn/start', {
       turn,
@@ -483,7 +480,7 @@ function soakTurn(index: number): ConversationTurnSpec {
 }
 
 function toolStream(index: number, marker: string): StreamChunk[] {
-  const callId = brandString<ToolCallId>(`performance-tool-${marker.toLowerCase()}-${String(index)}`)
+  const callId = ToolCallId(`performance-tool-${marker.toLowerCase()}-${String(index)}`)
   const args = JSON.stringify({
     command: `printf '${marker}\\n'`,
     description: `Emit performance marker ${String(index)}`,
@@ -993,11 +990,7 @@ async function continueConversation(
     const streamAfter = await chromiumMetrics(cdp)
     const mutations = await stopMutationProbe(world.page)
     const turnEvents = world.sessionEvents.slice(eventStart)
-    const chunks = turnEvents.flatMap(event => (
-      event.type === 'assistant/message' || event.type === 'assistant/attempt'
-        ? expandAssistantStream(event.data.stream)
-        : []
-    ))
+    const chunks = await settlementChunks(world.scaffold, settledSessionId, turnEvents)
     const toolCalls = turnEvents.filter(event => event.type === 'tool/call')
     const toolResults = turnEvents.filter(event => event.type === 'tool/result')
     const toolTurn = spec.toolResultMarker !== undefined
@@ -1115,11 +1108,7 @@ async function measurePostSoakUserRender(
   const fullTurnMs = performance.now() - fullTurnStarted
 
   const turnEvents = world.sessionEvents.slice(eventStart)
-  const chunks = turnEvents.flatMap(event => (
-    event.type === 'assistant/message' || event.type === 'assistant/attempt'
-      ? expandAssistantStream(event.data.stream)
-      : []
-  ))
+  const chunks = await settlementChunks(world.scaffold, settledSessionId, turnEvents)
   const user = turnEvents.find(
     event => event.type === 'user/message' && event.data.source.kind === 'user',
   )
@@ -1148,6 +1137,25 @@ async function measurePostSoakUserRender(
     browserAfterPaintSample,
     fullTurnMs: rounded(fullTurnMs),
     persistedChunks: chunks.length,
+  }
+}
+
+/** Expand the Assistant streams V5 stores beside the log for one turn's settlements. */
+async function settlementChunks(
+  scaffold: WebScaffold,
+  sessionId: SessionId,
+  settlements: readonly SessionEvent[],
+): Promise<readonly TimedStreamChunk[]> {
+  const handle = await scaffold.ctx.sessionPersistence.open(sessionId, 'read')
+  try {
+    const records: AssistantStreamRecord[] = []
+    for (const event of settlements) {
+      if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') continue
+      records.push(...await handle.readAssistantStream?.(event.seq) ?? [])
+    }
+    return expandAssistantStream(records)
+  } finally {
+    await handle.close()
   }
 }
 
@@ -1343,7 +1351,7 @@ describe('manual web performance: complex workspace and history', () => {
         startingTurns: DEFAULT_HISTORY_TURNS,
         turnCount: COMPARISON_TURNS,
         turnSpec: comparisonTurn,
-        expectedSessionId: brandString<SessionId>(LONG_SESSION_ID),
+        expectedSessionId: SessionId(LONG_SESSION_ID),
       })
       expect(conversation.toolTurns).toBe(2)
       console.info(`WEB_PERF_RESULT ${JSON.stringify({
@@ -1389,7 +1397,7 @@ describe('manual web performance: complex workspace and history', () => {
         startingTurns: LONG_HISTORY_TURNS,
         turnCount: COMPARISON_TURNS,
         turnSpec: comparisonTurn,
-        expectedSessionId: brandString<SessionId>(LONG_SESSION_ID),
+        expectedSessionId: SessionId(LONG_SESSION_ID),
       })
       expect(conversation.toolTurns).toBe(2)
       console.info(`WEB_PERF_RESULT ${JSON.stringify({
