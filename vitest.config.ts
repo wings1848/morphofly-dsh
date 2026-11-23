@@ -7,6 +7,7 @@ import { defineConfig } from 'vitest/config'
 import { standardDecoratorPlugin, vitestExecArgv } from './vitest.shared.ts'
 import { COVERAGE_EXEMPT_ENV, coverageExemptHeavySuites } from './scripts/coverage-exempt.ts'
 import { COVERAGE_PARTITION_MODE_ENV, COVERAGE_TEST_TIMEOUT_ENV, coverageTestTimeoutOptions } from './scripts/coverage-partitions.ts'
+import { FORK_CI_EXEMPT_ENV, forkCiExemptExcludes } from './scripts/fork-ci-exempt.ts'
 import { LOCAL_TEST_PARALLELISM_CAP, defaultParallelism } from './scripts/parallelism.ts'
 
 // Prints exact `path:line:col` records for every uncovered statement, branch
@@ -152,6 +153,15 @@ const coverageExemptExcludes = coverageExemptRaw === '1'
   ? coverageExemptHeavySuites.map(suite => suite.exclude)
   : []
 
+// The fork's advisory unit lane sets this env; suites that need the upstream
+// self-hosted capabilities are then removed from every project (membership
+// contract in scripts/fork-ci-exempt.ts).
+const forkCiExemptRaw = process.env[FORK_CI_EXEMPT_ENV]
+if (forkCiExemptRaw !== undefined && forkCiExemptRaw !== '' && forkCiExemptRaw !== '1') {
+  throw new Error(`vitest config: ${FORK_CI_EXEMPT_ENV} must be '1' or unset, got ${JSON.stringify(forkCiExemptRaw)}.`)
+}
+const forkCiExempts = forkCiExemptRaw === '1' ? forkCiExemptExcludes : []
+
 const coveragePartitionRaw = process.env[COVERAGE_PARTITION_MODE_ENV]
 if (coveragePartitionRaw !== undefined && coveragePartitionRaw !== '' && coveragePartitionRaw !== '1') {
   throw new Error(`vitest config: ${COVERAGE_PARTITION_MODE_ENV} must be '1' or unset, got ${JSON.stringify(coveragePartitionRaw)}.`)
@@ -229,6 +239,7 @@ export default defineConfig({
             ...platformUnsupportedTests,
             ...processBoundTests,
             ...coverageExemptExcludes,
+            ...forkCiExempts,
           ],
         },
       },
@@ -248,6 +259,7 @@ export default defineConfig({
           exclude: [
             ...platformUnsupportedTests,
             ...coverageExemptExcludes,
+            ...forkCiExempts,
           ],
         },
       },
