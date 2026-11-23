@@ -28,6 +28,8 @@ export interface SessionObservation extends Disposable {
   readonly header: SessionHeader
   /** Exact fork-inherited event count paired with {@link header}. */
   readonly inheritedEventCount: SessionLogOffsetType
+  /** How many of {@link events} were stored; the rest are synthetic interrupted-turn closers. */
+  readonly persistedEventCount?: SessionLogOffsetType
   /**
    * Immutable contiguous events at {@link cursor}. A live observation
    * materializes this array on first read, so a consumer that reads only the
@@ -73,6 +75,8 @@ export interface SessionObservationOptions {
  * instance still reports the same revision.
  */
 interface PreparedEntry {
+  /** How many of the balanced log's events were stored; the rest are the synthetic closers. */
+  readonly persistedEventCount: SessionLogOffsetType
   /** Stable service identity whose `stat` produced this revision; proxy references are not instance identities. */
   readonly persistenceIdentity: symbol
   /** Durable revision observed by `stat` immediately before the log read. */
@@ -180,6 +184,7 @@ export class SessionObservationReader {
             )
           }
           entry = {
+            persistedEventCount: loaded.persistedEventCount,
             persistenceIdentity: persistence.identity,
             revision: snapshot.revision,
             session,
@@ -308,6 +313,7 @@ export class SessionObservationReader {
         source: 'prepared',
         header: entry.session.header,
         inheritedEventCount: entry.session.inheritedEventCount,
+        persistedEventCount: entry.persistedEventCount,
         events: entry.events,
         cursor: entry.events.at(-1)?.seq ?? -1,
         revision: entry.revision,

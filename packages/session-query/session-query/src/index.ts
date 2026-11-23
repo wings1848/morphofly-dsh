@@ -13,6 +13,7 @@ import {
   type SessionId,
   type SessionSeq as SessionSeqType,
 } from '@deepseek-ai/dsh-session'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
 import type {
@@ -48,6 +49,8 @@ import {
   type Config,
 } from './config.ts'
 import { ColdOpenBudget } from './cold-open-budget.ts'
+import { sessionListMetadataDefinition } from './list-metadata.ts'
+import type { SessionListMetadata } from './types.ts'
 import { SessionCorpus } from './corpus.ts'
 import {
   SessionObservationReader,
@@ -103,9 +106,10 @@ declare module '@deepseek-ai/cordis' {
  * generations, and query execution on the same `ctx.sessionQuery` service.
  */
 export abstract class SessionQueryEngine extends Service {
-  static inject = ['sessions']
+  static inject = ['sessions', 'sessionProjections']
 
   private readonly _readWindowMax: number
+  private _listMetadata!: ProjectionHandle<SessionListMetadata>
   private readonly _coldOpenBudget: ColdOpenBudget
   private readonly _corpus: SessionCorpus
   private readonly _observations: SessionObservationReader
@@ -166,6 +170,20 @@ export abstract class SessionQueryEngine extends Service {
       cacheBytes: preparedSessionCacheBytes,
       coldOpenBudget: this._coldOpenBudget,
     })
+  }
+
+  /** Register the Session-list metadata projection for this service's lifetime. */
+  protected async [Service.init](): Promise<void> {
+    this._listMetadata = await this.ctx.sessionProjections.register(sessionListMetadataDefinition)
+  }
+
+  /**
+   * Read the metadata that summarizes one live or prepared Session in a Session list.
+   * @param session - live or prepared Session to summarize.
+   * @returns whether the Session has no turn, and its latest human-authored prompt time.
+   */
+  getListMetadata(session: Session): SessionListMetadata {
+    return this._listMetadata.stateOf(session)
   }
 
   /** Heap pricing shared by corpus and index cold reads. */
