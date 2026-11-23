@@ -47,6 +47,7 @@ import {
   SessionQueryError,
   type Config,
 } from './config.ts'
+import { ColdOpenBudget } from './cold-open-budget.ts'
 import { SessionCorpus } from './corpus.ts'
 import {
   SessionObservationReader,
@@ -105,6 +106,7 @@ export abstract class SessionQueryEngine extends Service {
   static inject = ['sessions']
 
   private readonly _readWindowMax: number
+  private readonly _coldOpenBudget: ColdOpenBudget
   private readonly _corpus: SessionCorpus
   private readonly _observations: SessionObservationReader
 
@@ -156,12 +158,19 @@ export abstract class SessionQueryEngine extends Service {
         'SESSION_QUERY_INVALID_CONFIG',
       )
     }
-    this._corpus = new SessionCorpus(ctx, persistedReadConcurrency)
+    // One budget prices every materializing path: observations, corpus reads,
+    // and the search index build.
+    this._coldOpenBudget = new ColdOpenBudget(coldOpenHeapShare, coldOpenHeapMultiplier)
+    this._corpus = new SessionCorpus(ctx, persistedReadConcurrency, this._coldOpenBudget)
     this._observations = new SessionObservationReader(ctx, preparedSessionCacheSize, {
       cacheBytes: preparedSessionCacheBytes,
-      coldOpenHeapShare,
-      coldOpenHeapMultiplier,
+      coldOpenBudget: this._coldOpenBudget,
     })
+  }
+
+  /** Heap pricing shared by corpus and index cold reads. */
+  protected get coldOpenBudget(): ColdOpenBudget {
+    return this._coldOpenBudget
   }
 
   /**

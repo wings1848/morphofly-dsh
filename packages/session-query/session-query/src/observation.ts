@@ -1,6 +1,5 @@
 /** Shared live/prepared observations for Session page and lifecycle consumers. */
 
-import { getHeapStatistics } from 'node:v8'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset as SessionLogOffsetType , SessionSeqCursor } from '@deepseek-ai/dsh-session'
@@ -19,6 +18,7 @@ import {
   SessionQueryError,
 } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
+import { ColdOpenBudget } from './cold-open-budget.ts'
 
 /** One exact immutable Session cut retained for the caller's read lifetime. */
 export interface SessionObservation extends Disposable {
@@ -55,6 +55,8 @@ export interface SessionObservationLimits {
   readonly coldOpenHeapShare?: number
   /** Estimated heap bytes per stored artifact byte. */
   readonly coldOpenHeapMultiplier?: number
+  /** Shared budget for every cold-open path; defaults to one built from the two fields above. */
+  readonly coldOpenBudget?: ColdOpenBudget
 }
 
 /** Projection work and cancellation requested for one exact observation. */
@@ -101,8 +103,7 @@ interface PreparedEntry {
 export class SessionObservationReader {
   private readonly cache = new Map<SessionId, PreparedEntry>()
   private readonly cacheBytes: number
-  private readonly coldOpenHeapShare: number
-  private readonly coldOpenHeapMultiplier: number
+  private readonly budget: ColdOpenBudget
   /** Running estimate of the heap bytes the cache retains. */
   private retainedBytes = 0
 
@@ -117,8 +118,10 @@ export class SessionObservationReader {
     limits: SessionObservationLimits = {},
   ) {
     this.cacheBytes = limits.cacheBytes ?? SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_BYTES
-    this.coldOpenHeapShare = limits.coldOpenHeapShare ?? SESSION_QUERY_DEFAULT_COLD_OPEN_HEAP_SHARE
-    this.coldOpenHeapMultiplier = limits.coldOpenHeapMultiplier ?? SESSION_QUERY_DEFAULT_COLD_OPEN_HEAP_MULTIPLIER
+    this.budget = limits.coldOpenBudget ?? new ColdOpenBudget(
+      limits.coldOpenHeapShare ?? SESSION_QUERY_DEFAULT_COLD_OPEN_HEAP_SHARE,
+      limits.coldOpenHeapMultiplier ?? SESSION_QUERY_DEFAULT_COLD_OPEN_HEAP_MULTIPLIER,
+    )
   }
 
   /**
@@ -146,42 +149,48 @@ export class SessionObservationReader {
       if (attachedDuringStat !== undefined) return this.live(attachedDuringStat, projectionMode)
       let entry = this.cachedEntry(persistence.identity, sessionId, snapshot.revision)
       if (entry === undefined) {
-        this.assertColdOpenAffordable(sessionId, snapshot)
-        const loaded = await this.loadSource(persistence, sessionId, signal)
-        throwIfObservationAborted(signal)
-        const attached = this.ctx.sessions.get(sessionId)
-        if (attached !== undefined) return this.live(attached, projectionMode)
-        // The handle marks persisted events as adoptable; synthetic closers
-        // are owned by this read, so the combined seed needs no copy.
-        const seed = loaded.events
-        let session: Session
+        // Price and reserve the read before it materializes anything, so a
+        // concurrent open cannot spend the same free headroom.
+        const release = this.budget.reserve(sessionId, snapshot.sizeBytes)
         try {
-          session = this.ctx.sessions.prepare(sessionId, {
-            seed,
-            meta: structuredClone(loaded.header),
-            inheritedEventCount: loaded.inheritedEventCount,
-            eventState: loaded.eventState,
-          })
-        } catch (error: unknown) {
-          // The store rejects an id with a live owner: that owner is the
-          // fresher source, so retry the live path. Any other rejection means
-          // the stored log failed restore validation.
-          if (this.ctx.sessions.get(sessionId) !== undefined) continue
-          throw new SessionQueryError(
-            `stored session "${sessionId}" is corrupt: ${errorMessage(error)}`,
-            'SESSION_QUERY_CORRUPT_SESSION',
-            { cause: error },
-          )
+          const loaded = await this.loadSource(persistence, sessionId, signal)
+          throwIfObservationAborted(signal)
+          const attached = this.ctx.sessions.get(sessionId)
+          if (attached !== undefined) return this.live(attached, projectionMode)
+          // The handle marks persisted events as adoptable; synthetic closers
+          // are owned by this read, so the combined seed needs no copy.
+          const seed = loaded.events
+          let session: Session
+          try {
+            session = this.ctx.sessions.prepare(sessionId, {
+              seed,
+              meta: structuredClone(loaded.header),
+              inheritedEventCount: loaded.inheritedEventCount,
+              eventState: loaded.eventState,
+            })
+          } catch (error: unknown) {
+            // The store rejects an id with a live owner: that owner is the
+            // fresher source, so retry the live path. Any other rejection means
+            // the stored log failed restore validation.
+            if (this.ctx.sessions.get(sessionId) !== undefined) continue
+            throw new SessionQueryError(
+              `stored session "${sessionId}" is corrupt: ${errorMessage(error)}`,
+              'SESSION_QUERY_CORRUPT_SESSION',
+              { cause: error },
+            )
+          }
+          entry = {
+            persistenceIdentity: persistence.identity,
+            revision: snapshot.revision,
+            session,
+            events: Object.freeze(seed),
+            bytes: this.budget.estimate(snapshot.sizeBytes),
+            refs: 0,
+          }
+          this.store(sessionId, entry)
+        } finally {
+          release()
         }
-        entry = {
-          persistenceIdentity: persistence.identity,
-          revision: snapshot.revision,
-          session,
-          events: Object.freeze(seed),
-          bytes: this.estimateBytes(snapshot),
-          refs: 0,
-        }
-        this.store(sessionId, entry)
       }
 
       let projections: ProjectionSnapshot | undefined
@@ -285,32 +294,6 @@ export class SessionObservationReader {
       && (this.cacheBytes === 0 || this.retainedBytes <= this.cacheBytes)
   }
 
-  /**
-   * Refuse a cold open whose estimated heap cost exceeds its share of free V8
-   * heap. The estimate prices the stored artifact at the configured multiple; a
-   * backend that reports no `sizeBytes` cannot be priced and passes.
-   * @param sessionId - the stored session about to be loaded.
-   * @param snapshot - the stat result that priced it.
-   * @throws {SessionQueryError} `SESSION_QUERY_SESSION_TOO_LARGE` when the estimate does not fit.
-   */
-  private assertColdOpenAffordable(sessionId: SessionId, snapshot: SessionPersistenceSnapshot): void {
-    if (this.coldOpenHeapShare === 0 || snapshot.sizeBytes === undefined) return
-    const estimated = this.estimateBytes(snapshot)
-    const free = freeHeapBytes()
-    const budget = Math.floor(free * this.coldOpenHeapShare)
-    if (estimated <= budget) return
-    throw new SessionQueryError(
-      `session "${sessionId}" is too large to open: about ${formatBytes(estimated)} of heap for ${formatBytes(snapshot.sizeBytes)} stored, but only ${formatBytes(free)} of heap is free; close other Sessions or restart the host with a larger heap`,
-      'SESSION_QUERY_SESSION_TOO_LARGE',
-    )
-  }
-
-  /** Estimate the heap one cold observation of a stored artifact retains. */
-  private estimateBytes(snapshot: SessionPersistenceSnapshot): number {
-    return snapshot.sizeBytes === undefined
-      ? 0
-      : Math.ceil(snapshot.sizeBytes * this.coldOpenHeapMultiplier)
-  }
 
   /** Build one disposable lease over a cached entry, pinning it until every lease releases. */
   private preparedLease(
@@ -398,22 +381,6 @@ export class SessionObservationReader {
   }
 }
 
-/** Free V8 heap one cold open may estimate against, in bytes. */
-function freeHeapBytes(): number {
-  return Math.max(0, getHeapStatistics().heap_size_limit - process.memoryUsage().heapUsed)
-}
-
-/** Render a byte count for an operator-facing refusal message. */
-function formatBytes(bytes: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB'] as const
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit += 1
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit] as string}`
-}
 
 function throwIfObservationAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted !== true) return

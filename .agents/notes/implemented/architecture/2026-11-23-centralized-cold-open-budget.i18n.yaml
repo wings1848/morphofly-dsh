@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-23-centralized-cold-open-budget.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-23-centralized-cold-open-budget.md
+/agent-note-one-cold-open-budget-for-every-path-that-materializes-a-log:
+  en: b663b28b10a3b7bb
+  zh: ef5a1be70e4b3089
+/agent-note-one-cold-open-budget-for-every-path-that-materializes-a-log/problem:
+  en: d960a68954f57c17
+  zh: c88519e44b87e299
+/agent-note-one-cold-open-budget-for-every-path-that-materializes-a-log/decision:
+  en: 603468defade52b0
+  zh: bd75ed12d01b2c5d
+/agent-note-one-cold-open-budget-for-every-path-that-materializes-a-log/alternatives-considered:
+  en: b7cf8bbd1836ee99
+  zh: 7a159b3f5a294a6e
+/agent-note-one-cold-open-budget-for-every-path-that-materializes-a-log/consequences:
+  en: 64b0667a6ad50b1f
+  zh: f836cbd39df8c5d6
+/agent-note-one-cold-open-budget-for-every-path-that-materializes-a-log/testing:
+  en: f9e815872319cb35
+  zh: d1a3d5effafe94c6

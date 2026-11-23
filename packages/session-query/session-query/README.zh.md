@@ -65,7 +65,7 @@ kind: "package-reference"
 
 ### 失败与恢复
 
-失败带有稳定的 `SessionQueryError.code` 类型。你会遇到的包括：id 不存在时 `SESSION_QUERY_SESSION_NOT_FOUND`；同一会话的实时与持久化观察在不可变 header 上不一致时 `SESSION_QUERY_SOURCE_CONFLICT`；已挂载持久化不可读时 `SESSION_QUERY_PERSISTENCE_FAILED`；持久化记录未通过 Session 校验，或实时或 prepared 观察的投影计算失败时 `SESSION_QUERY_CORRUPT_SESSION`；加载的日志破坏表层约定时 `SESSION_QUERY_INVALID_SURFACE`；冷打开的估算超过配置的空闲堆份额时 `SESSION_QUERY_SESSION_TOO_LARGE`，该拒绝发生在打开存储日志之前，因此不会物化任何内容。投影失败会将原始错误保留为 `cause`。针对已知实时会话的读取从不查询持久化，因此后端故障不会让当前内存历史变得不可读。
+失败带有稳定的 `SessionQueryError.code` 类型。你会遇到的包括：id 不存在时 `SESSION_QUERY_SESSION_NOT_FOUND`；同一会话的实时与持久化观察在不可变 header 上不一致时 `SESSION_QUERY_SOURCE_CONFLICT`；已挂载持久化不可读时 `SESSION_QUERY_PERSISTENCE_FAILED`；持久化记录未通过 Session 校验，或实时或 prepared 观察的投影计算失败时 `SESSION_QUERY_CORRUPT_SESSION`；加载的日志破坏表层约定时 `SESSION_QUERY_INVALID_SURFACE`；冷打开的估算超过配置的空闲堆份额时 `SESSION_QUERY_SESSION_TOO_LARGE`，该拒绝发生在打开存储日志之前，因此不会物化任何内容；份额按每一条物化路径计价——点观察、corpus 读取与搜索索引构建——并用在途预留让并发打开共同消耗它，而不是各自按同一份空闲堆通过。投影失败会将原始错误保留为 `cause`。针对已知实时会话的读取从不查询持久化，因此后端故障不会让当前内存历史变得不可读。
 
 -----
 
